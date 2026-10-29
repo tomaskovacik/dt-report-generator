@@ -7,6 +7,7 @@ from wtforms import (
     BooleanField,
     PasswordField,
     SelectField,
+    SelectMultipleField,
     StringField,
     SubmitField,
     validators,
@@ -33,6 +34,11 @@ class GetReportForm(FlaskForm):
     compare = BooleanField("Compare with another version")
     project_b = SelectField("Project B",
         choices=[("", "")],
+        validators=[validators.Optional()])
+    dashboard = BooleanField("Combined dashboard (several projects)")
+    projects = SelectMultipleField("Projects",
+        choices=[],
+        validate_choice=False,
         validators=[validators.Optional()])
     submit = SubmitField("Get report")
 

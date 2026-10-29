@@ -10,7 +10,7 @@
   --page: #f9f9f7; --surface: #fcfcfb; --surface-2: #f3f2ee;
   --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
   --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
-  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #4a3aa7; --s8: #e34948;
   --critical: #d03b3b; --serious: #ec835a; --warning: #fab219; --good: #0ca30c; --info: #898781;
   --link: #1c5cab; --good-text: #006300;
 }
@@ -20,7 +20,7 @@
     --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321;
     --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
     --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
-    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
     --link: #86b6ef; --good-text: #0ca30c;
   }
 }
@@ -29,7 +29,7 @@
   --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321;
   --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
   --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
-  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
   --link: #86b6ef; --good-text: #0ca30c;
 }
 * { box-sizing: border-box; }
@@ -199,13 +199,13 @@ const SEVS = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO", "UNASSIGNED"];
 const SEV_LABEL = {CRITICAL: "Critical", HIGH: "High", MEDIUM: "Medium", LOW: "Low", INFO: "Info", UNASSIGNED: "Unassigned"};
 const SEV_COLOR = {critical: "var(--critical)", high: "var(--serious)", medium: "var(--warning)", low: "var(--info)"};
 const P = DATA.projects;
-P.forEach((p, i) => p.color = `var(--s${i + 1})`);
+P.forEach((p, i) => p.color = `var(--s${(i % 8) + 1})`);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 const $ = id => document.getElementById(id);
 
 const state = {apps: new Set(P.map(p => p.name)), sevs: new Set(["critical", "high", "other"]), kev: false, noFix: false, p1: false, q: "", tab: "upgrades", sort: {upgrades: ["prio", -1], vulns: ["prio", -1]}};
 
-$("meta").textContent = `Generated ${DATA.generated} · ${P.length} applications`;
+$("meta").textContent = `Generated ${DATA.generated} · ${P.length} application${P.length > 1 ? "s" : ""}`;
 
 /* ---------- priority ---------- */
 function prio(v) {
@@ -237,8 +237,8 @@ function drawExec() {
   const chN = crit + high;
   const kevApps = [...new Set(kev.map(v => v.app.name))];
   const pct = n => Math.round(100 * n / Math.max(1, chN));
-  $("verdict").innerHTML = `Across <b>${P.length} applications</b>, Dependency-Track reports <b>${crit} critical</b> and <b>${high} high</b> severity findings in third-party libraries. ` +
-    (kev.length ? `<b>${kevIds.size} vulnerabilities (${kev.length} findings) are on CISA’s Known Exploited list</b>, which means attackers are using them right now. They are in ${kevApps.map(esc).join(" and ")}. ` : "") +
+  $("verdict").innerHTML = `${P.length > 1 ? `Across <b>${P.length} applications</b>, ` : `In <b>${esc(P[0].name)}</b>, `}Dependency-Track reports <b>${crit} critical</b> and <b>${high} high</b> severity findings in third-party libraries. ` +
+    (kev.length ? `<b>${kevIds.size} ${kevIds.size === 1 ? "vulnerability" : "vulnerabilities"} (${kev.length} finding${kev.length === 1 ? "" : "s"}) ${kevIds.size === 1 ? "is" : "are"} on CISA’s Known Exploited list</b>, which means attackers are using them right now. ${P.length > 1 ? `They are in ${kevApps.map(esc).join(" and ")}. ` : ""}` : "") +
     `<b>${pct(hard.length)}% of critical/high findings cannot be fixed by patch updates</b>: they need a major framework upgrade, or no public fix exists for the version in use. The remaining ${pct(easy.length)}% can be fixed with routine dependency updates.`;
   const kpi = (n, l, d, color) => `<div class="kpi"><div class="n">${n}</div><div class="l">${color ? `<span class="dot" style="background:${color}"></span>` : ""}${l}</div>${d ? `<div class="d">${d}</div>` : ""}</div>`;
   $("kpis").innerHTML =
@@ -419,27 +419,21 @@ function upgradeRows(vulns) {
   return [...m.values()];
 }
 
-// lenient version compare, mirrors build script
+// lenient version compare, mirrors backend/dashboard.py vkey()
 function vkey(v) {
-  const out = [];
-  String(v || "").split(/[.\-+_]/).forEach(p => {
-    if (/^\d+$/.test(p)) out.push([1, +p, ""]);
-    else if (["final", "release", "ga", ""].includes(p.toLowerCase())) {}
-    else { const m = p.match(/^(\d+)(.*)$/); if (m) { out.push([1, +m[1], ""]); out.push([0, 0, m[2].toLowerCase()]); } else out.push([0, 0, p.toLowerCase()]); }
-  });
-  while (out.length && out[out.length - 1][0] === 1 && out[out.length - 1][1] === 0) out.pop();
-  return out;
+  const parts = String(v || "").split(/[.\-+_]/), nums = [];
+  for (const p of parts) { const m = p.match(/^(\d+)/); if (!m) break; nums.push(+m[1]); if (m[1] !== p) break; }
+  const quals = parts.slice(nums.length).map(q => q.toLowerCase()).filter(q => !["final", "release", "ga", ""].includes(q));
+  while (nums.length < 8) nums.push(0);
+  return [nums, quals];
 }
 function vcmp(a, b) {
-  const ka = vkey(a), kb = vkey(b);
-  for (let i = 0; i < Math.max(ka.length, kb.length); i++) {
-    const x = ka[i], y = kb[i];
-    if (!x) return -1; if (!y) return 1;
-    for (let j = 0; j < 3; j++) if (x[j] !== y[j]) return x[j] < y[j] ? -1 : 1;
-  }
-  return 0;
+  const [na, qa] = vkey(a), [nb, qb] = vkey(b);
+  for (let i = 0; i < Math.max(na.length, nb.length); i++) if ((na[i] ?? 0) !== (nb[i] ?? 0)) return (na[i] ?? 0) < (nb[i] ?? 0) ? -1 : 1;
+  if (!qa.length || !qb.length) return qa.length === qb.length ? 0 : qa.length ? -1 : 1;
+  const x = qa.join("."), y = qb.join(".");
+  return x === y ? 0 : x < y ? -1 : 1;
 }
-
 const sevBadge = s => `<span class="badge"><span class="dot" style="background:${SEV_COLOR[s] || "var(--info)"}"></span>${s[0].toUpperCase() + s.slice(1)}</span>`;
 function idLinks(v) {
   const ids = [...v.cves.map(c => `<a href="${nvd(c)}" target="_blank" rel="noopener" title="NVD">${esc(c)}</a>`),

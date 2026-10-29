@@ -185,6 +185,12 @@
                 minimumInputLength: 0,
                 ajax: buildAjaxConfig({})
             });
+            $("#projects").select2({
+                placeholder: "Pick up to 8 projects for one combined dashboard",
+                allowClear: true,
+                minimumInputLength: 0,
+                ajax: buildAjaxConfig({})
+            });
             $("#project_b").select2({
                 placeholder: "Pick the comparison version of the same project",
                 allowClear: true,
@@ -202,20 +208,32 @@
                 $("#project_b").val(null).trigger("change");
             });
 
-            // Compare-mode toggle: hide project_b unless the checkbox is on,
-            // and switch the form action between single-report and diff routes.
+            // Mode toggles: compare shows project_b and posts to the diff
+            // route; dashboard swaps the single project picker for a multi
+            // select and posts to the dashboard route. The two are exclusive.
             var $form = $("form").first();
             var actionSingle = "{{ url_for('get_report') }}";
             var actionDiff = "{{ url_for('get_diff_report') }}";
-            var $projectBGroup = $("#project_b").closest(".mb-3, .form-group");
-            function syncCompareUI() {
-                var on = $("#compare").is(":checked");
-                $projectBGroup.toggle(on);
-                $form.attr("action", on ? actionDiff : actionSingle);
-                $("#submit").val(on ? "Get diff report" : "Get report");
+            var actionDashboard = "{{ url_for('get_dashboard') }}";
+            var group = function (sel) { return $(sel).closest(".mb-3, .form-group"); };
+            var $projectGroup = group("#project");
+            var $projectBGroup = group("#project_b");
+            var $projectsGroup = group("#projects");
+            var $compareGroup = group("#compare");
+            function syncModeUI() {
+                var dash = $("#dashboard").is(":checked");
+                if (dash) $("#compare").prop("checked", false);
+                var cmp = $("#compare").is(":checked");
+                $projectGroup.toggle(!dash);
+                $("#project").prop("required", !dash);
+                $compareGroup.toggle(!dash);
+                $projectBGroup.toggle(cmp);
+                $projectsGroup.toggle(dash);
+                $form.attr("action", dash ? actionDashboard : cmp ? actionDiff : actionSingle);
+                $("#submit").val(dash ? "Get dashboard" : cmp ? "Get diff report" : "Get report");
             }
-            syncCompareUI();
-            $("#compare").on("change", syncCompareUI);
+            syncModeUI();
+            $("#compare, #dashboard").on("change", syncModeUI);
         });
     </script>
 {% endblock %}

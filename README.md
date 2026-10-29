@@ -24,6 +24,21 @@ docker run --name dtrg -d -p 5000:5000 ghcr.io/denimoll/dt-report-generator
     - Project - project ID (Object Identifier parameter in Project Details or identifier in the URL after ".../projects/")
 3. Click "Get report"
 4. Wait
+
+To combine several projects into one management dashboard, tick **Combined dashboard (several projects)**, pick up to 8 projects and click "Get dashboard". You get a single `dashboard.html` (see [Management dashboard](#management-dashboard)).
+
+### Management dashboard
+Every report ZIP now also has a `dashboard.html`. It is a self-contained page (no external scripts) written for people who need the "how bad is it and what do we do" answer, not the raw finding list:
+
+- **Executive summary**: a generated verdict, KPIs (critical, high, actively exploited per CISA KEV, P1 count, share of findings that need a major upgrade) and a per-app status table with the libraries causing the most risk.
+- **Bar chart** of all findings by severity, with the apps stacked (table view included).
+- **Fix first (P1)**: KEV findings of any severity plus EPSS ≥ 10%. **P2** = critical and network-reachable, or EPSS ≥ 1%. **P3** = the rest of critical/high.
+- **Upgrade plan per library**: minimum version that fixes all its critical/high/KEV findings, effort (patch / minor / major / no fix), latest version, direct vs. transitive.
+- **Vulnerability table**: CVE (NVD link), GHSA (GitHub advisory link), CVSS + vector, EPSS, CWE links, fixed-in version. Filterable and searchable.
+- **Dependency tree** from `graph.html`.
+
+Fix versions come from the GitHub Advisory DB (`first_patched_version`) and DT's affected-version ranges (incl. NVD CPE ranges). Each candidate is checked on Maven Central / npm. When the only fix for your release line is a commercial build (typical for Spring / Tomcat EOL lines), the page says so and suggests the newest public release instead. These lookups are best effort: if they fail, the fix column stays empty and the report is still produced. Set `DTRG_DASHBOARD_ENRICH=false` on air-gapped installs. The DT API key needs `VIEW_PORTFOLIO` and `VIEW_VULNERABILITY`.
+
 ## CI usage
 For pipelines a JSON API is exposed alongside the form. It returns the same ZIP, but does not need a browser session and is suitable for `curl` from a build job.
 
@@ -53,7 +68,16 @@ curl -fSL -o diff.zip \
     -d '{"projectA":"<old-uuid>","projectB":"<new-uuid>"}' \
     http://dtrg.internal:5000/api/v1/reports/diff
 ```
-The ZIP contains `result.xlsx` (sheets: General information, Added, Removed, Common) and `summary.json` (`kind: "diff"`). Common entries surface both component versions and both VEX states so a CVE that travelled with a library upgrade is visible.
+Combined management dashboard for several projects (returns `dashboard.html`, not a ZIP):
+```
+curl -fSL -o dashboard.html \
+    -H "X-DTRG-Key: $DTRG_API_KEY" \
+    -H "Content-Type: application/json" \
+    -d '{"projects":["<uuid-1>","<uuid-2>","<uuid-3>"]}' \
+    http://dtrg.internal:5000/api/v1/reports/dashboard
+```
+
+The diff ZIP contains `result.xlsx` (sheets: General information, Added, Removed, Common) and `summary.json` (`kind: "diff"`). Common entries surface both component versions and both VEX states so a CVE that travelled with a library upgrade is visible.
 
 ### Working with `summary.json`
 
@@ -157,6 +181,9 @@ All environment variables:
 * DTRG_INCLUDE_SUPPRESSED - when `true`, vulnerabilities that DT considers suppressed via VEX (state `resolved` / `resolved_with_pedigree` / `false_positive` / `not_affected`) are still rendered in the report with their analysis state in the `All issues` sheet. Default `false`, which matches the DT UI.
 * DTRG_GRAPH_DEPTH - max depth of the dependency graph traversal. Direct dependencies are level 1, their children level 2, etc. The level of each component is shown in column G of the `Vulnerable dependencies` sheet; components beyond the depth limit show an empty cell. Default 3.
 * DTRG_PROJECTS_PAGE_SIZE - page size for the form's project dropdown. Projects are loaded lazily as the user scrolls or types into the search box, so this controls how many DT projects are fetched per round-trip. Default 50. Does not affect `/api/v1/projects` (which still returns the full list by default).
+* DTRG_DASHBOARD_ENRICH - when `true` (default), the dashboard looks up fix versions on `api.github.com/advisories`, `repo1.maven.org` and `registry.npmjs.org`. Set `false` for air-gapped installs; fix versions then come from DT's affected-version ranges only.
+* DTRG_GITHUB_TOKEN - optional GitHub token for the advisory lookups (rate limit 60 → 5000 requests/hour). Any token works; it needs no scopes.
+* DTRG_DASHBOARD_MAX_PROJECTS - max projects per combined dashboard (default and maximum 8, the number of distinct chart colors).
 * CVEPAAS_URL - [CVE-PaaS](https://github.com/denimoll/CVE-PaaS) address
 ## Development
 Tests live under `tests/` and run with pytest:

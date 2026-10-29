@@ -1,12 +1,15 @@
 """ Main logic dependency track report generator """
 
 import hmac
+import json
 import logging
+import re
 import os
 import secrets
 import shutil
 import tempfile
 import zipfile
+from datetime import datetime
 from functools import wraps
 
 from flask import (
@@ -28,12 +31,14 @@ from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.utils import secure_filename
 
+from backend import dashboard
 from backend.dependency_graph import get_graph
 from backend.param_validators import projects_page_size
 from backend.projects import get_projects
 from backend.reports import (
     DIFF_ERROR_CROSS_PROJECT_PREFIX,
     DIFF_ERROR_SAME_PROJECT,
+    _resolve_params,
     create_diff_report,
     create_report,
 )
@@ -210,7 +215,7 @@ def _create_zip(output_dir, with_graph=False):
     zip_path = os.path.join(output_dir, "reports.zip")
     try:
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-            for file in ["result.docx", "result.xlsx", "summary.json"]:
+            for file in ["result.docx", "result.xlsx", "summary.json", "dashboard.html"]:
                 src = os.path.join(output_dir, file)
                 if os.path.exists(src):
                     zipf.write(src, arcname=file)
@@ -269,12 +274,47 @@ def _diff_user_error(err):
         return msg
     return None
 
+def _project_label(output_dir, fallback):
+    """ "name version" from the summary.json create_report just wrote """
+    try:
+        with open(os.path.join(output_dir, "summary.json"), encoding="utf-8") as f:
+            summary = json.load(f)
+    except (OSError, ValueError):
+        return fallback, {}
+    project = summary.get("project") or {}
+    version = project.get("version")
+    if version == "no version":  # create_report's placeholder for unversioned projects
+        version = None
+    label = " ".join(x for x in (project.get("name"), version) if x)
+    return label or fallback, summary
+
+def _collect_dashboard_project(url, headers, project, output_dir):
+    """ Dashboard data for one project whose dtrg report sits in output_dir """
+    label, summary = _project_label(output_dir, project)
+    tree = None
+    graph_path = os.path.join(output_dir, "graph.html")
+    if os.path.exists(graph_path):
+        with open(graph_path, encoding="utf-8") as f:
+            tree = dashboard.graph_tree(f.read())
+    return dashboard.build_project(url, headers, project, label, tree,
+                                   dashboard.direct_map(summary))
+
+def _add_dashboard(config, output_dir):
+    """ Best effort: drop dashboard.html next to the report, never fail it """
+    try:
+        url, headers, project = _resolve_params(config)
+        data = _collect_dashboard_project(url, headers, project, output_dir)
+        dashboard.render([data], os.path.join(output_dir, "dashboard.html"))
+    except Exception as e:  # pylint: disable=broad-except
+        logger.warning(f"Dashboard generation skipped: {e}")
+
 def _build_report(config, output_dir):
-    """ Run create_report + graph + zip and return (zip_path, name_or_error) """
+    """ Run create_report + graph + dashboard + zip and return (zip_path, name_or_error) """
     report, components = create_report(config, output_dir)
     if not isinstance(report, str):
         return None, report
     with_graph = _create_graph(components, output_dir) if components else False
+    _add_dashboard(config, output_dir)
     zip_path = _create_zip(output_dir, with_graph)
     if not zip_path:
         return None, "Failed to build report archive"
@@ -383,7 +423,7 @@ def get_report_api():
               example: 00000000-0000-0000-0000-000000000000
     responses:
       200:
-        description: ZIP archive with result.docx, result.xlsx, summary.json and graph.html.
+        description: ZIP archive with result.docx, result.xlsx, summary.json, graph.html and dashboard.html.
       400:
         description: Validation error (missing field or upstream rejected).
         schema:
@@ -577,6 +617,189 @@ def get_diff_report_api():
     return send_file(zip_path, as_attachment=True,
                      download_name=_safe_download_name(report),
                      mimetype="application/zip")
+
+
+# DASHBOARD GROUP
+def dashboard_max_projects() -> int:
+    """ Cap on projects per combined dashboard (the chart palette has 8 hues) """
+    try:
+        return max(1, min(int(os.getenv("DTRG_DASHBOARD_MAX_PROJECTS", "8")), 8))
+    except ValueError:
+        return 8
+
+def _project_ids(values):
+    """ Form sends "name version (uuid)", API sends bare UUIDs """
+    out = []
+    for raw in values or []:
+        match = re.search(r"\(([^()]+)\)\s*$", str(raw))
+        pid = match.group(1) if match else str(raw).strip()
+        if pid and pid not in out:
+            out.append(pid)
+    return out
+
+def _build_dashboard(config, projects, output_dir):
+    """ One combined page for several projects -> (html_path, name_or_error) """
+    if not projects:
+        return None, ValueError("Select at least one project")
+    if len(projects) > dashboard_max_projects():
+        return None, ValueError(f"At most {dashboard_max_projects()} projects per dashboard")
+    try:
+        url, headers, _ = _resolve_params({**config, "project": [projects[0]]})
+        collected = []
+        for i, project in enumerate(projects):
+            sub = os.path.join(output_dir, str(i))
+            os.makedirs(sub)
+            # the regular report pipeline provides the dependency tree and
+            # direct-dependency flags; its docx/xlsx are discarded
+            report, components = create_report({**config, "project": [project]}, sub)
+            if not isinstance(report, str):
+                return None, report
+            if components:
+                _create_graph(components, sub)
+            collected.append(_collect_dashboard_project(url, headers, project, sub))
+    except (ValueError, ConnectionError) as e:
+        return None, e
+    except Exception as e:  # pylint: disable=broad-except
+        logger.exception("Dashboard generation failed")
+        return None, e
+    path = dashboard.render(collected, os.path.join(output_dir, "dashboard.html"))
+    return path, f"dashboard {datetime.now().strftime('%d.%m.%Y')}"
+
+def _dashboard_user_error(err):
+    """ Input errors that are safe and useful to show to the user """
+    msg = str(err) if isinstance(err, ValueError) else ""
+    if msg == "Select at least one project" or msg.startswith("At most "):
+        return msg
+    return None
+
+def _send_dashboard(path, name):
+    return send_file(path, as_attachment=True, mimetype="text/html",
+                     download_name=secure_filename(f"{name}.html") or "dashboard.html")
+
+@app.route("/reports/dashboard", methods=["POST"])
+def get_dashboard():
+    """Browser form submission for a combined multi-project dashboard.
+    ---
+    tags:
+      - browser
+    consumes:
+      - application/x-www-form-urlencoded
+    produces:
+      - text/html
+    parameters:
+      - in: formData
+        name: csrf_token
+        required: true
+        type: string
+      - in: formData
+        name: url
+        type: string
+      - in: formData
+        name: token
+        type: string
+      - in: formData
+        name: projects
+        type: array
+        items:
+          type: string
+        collectionFormat: multi
+        description: '"name version (uuid)" values as produced by the form select.'
+    responses:
+      200:
+        description: Self-contained dashboard.html.
+      302:
+        description: Redirect back to the form on validation failure.
+      400:
+        description: CSRF token missing or invalid.
+    """
+    logger.info("Received request to generate dashboard")
+    output_dir = _new_output_dir()
+
+    @after_this_request
+    def _cleanup(response):
+        response.call_on_close(lambda: shutil.rmtree(output_dir, ignore_errors=True))
+        return response
+
+    data = request.form.to_dict(flat=False)
+    logger.debug(f"Dashboard form data received: {_redact(data)}")
+    config = {k: data.get(k) for k in ("url", "token") if data.get(k)}
+    path, name = _build_dashboard(config, _project_ids(data.get("projects")), output_dir)
+    if path:
+        return _send_dashboard(path, name)
+    logger.error(f"Dashboard generation failed: {name}")
+    flash(_dashboard_user_error(name) or _GENERIC_REPORT_FAILURE, "danger")
+    return redirect(url_for("index"))
+
+@app.route("/api/v1/reports/dashboard", methods=["POST"])
+@csrf.exempt
+@_api_limit()
+@require_api_key
+def get_dashboard_api():
+    """Generate one combined management dashboard for several DT projects.
+    ---
+    tags:
+      - api
+    security:
+      - ApiKey: []
+      - Bearer: []
+    consumes:
+      - application/json
+    produces:
+      - text/html
+      - application/json
+    parameters:
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          required:
+            - projects
+          properties:
+            url:
+              type: string
+              description: DT instance URL. Optional when DT_URL is set.
+            token:
+              type: string
+              description: DT API key. Optional when DT_TOKEN is set.
+            projects:
+              type: array
+              items:
+                type: string
+              description: DT project UUIDs (up to DTRG_DASHBOARD_MAX_PROJECTS, default 8).
+              example: ["00000000-0000-0000-0000-000000000001"]
+    responses:
+      200:
+        description: Self-contained dashboard.html.
+      400:
+        description: Validation error (missing field or upstream rejected).
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+      401:
+        description: DTRG_API_KEY is set and the request did not present it.
+    """
+    logger.info("Received API request to generate dashboard")
+    body = request.get_json(silent=True) or {}
+    config = {k: [str(body[k])] for k in ("url", "token") if body.get(k)}
+    projects = body.get("projects")
+    if not isinstance(projects, list):
+        return jsonify(error="projects must be a list of project UUIDs"), 400
+
+    output_dir = _new_output_dir()
+
+    @after_this_request
+    def _cleanup(response):
+        response.call_on_close(lambda: shutil.rmtree(output_dir, ignore_errors=True))
+        return response
+
+    path, name = _build_dashboard(config, _project_ids(projects), output_dir)
+    if not path:
+        logger.error(f"API dashboard generation failed: {name}")
+        return jsonify(error=_dashboard_user_error(name) or _GENERIC_REPORT_FAILURE), 400
+    return _send_dashboard(path, name)
 
 
 # PROJECTS GROUP
