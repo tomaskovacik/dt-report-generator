@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 CENTRAL = "https://repo1.maven.org/maven2/"
 _TIMEOUT = 20
-_RELEASE_RE = re.compile(r"^\d+\.\d+\.\d+(\.RELEASE)?$")
+_RELEASE_RE = re.compile(r"^\d+\.\d+\.\d+(\.\d+)?(\.RELEASE|\.Final)?$")
 _PROP_RE = re.compile(r"\$\{([^}]+)\}")
 
 _cache = {}
@@ -63,6 +63,8 @@ class _Pom:
     def __init__(self, group, artifact, version, depth=0):
         self.group, self.artifact, self.version = group, artifact, version
         self.props, self.managed, self.imports = {}, {}, []
+        # unresolved "${prop}" version strings, to tell which property controls what
+        self.raw_managed, self.raw_imports = {}, []
         text = _get_text(_pom_url(group, artifact, version))
         if not text:
             return
@@ -84,13 +86,16 @@ class _Pom:
                            "version": version, "revision": self.props.get("revision", version)})
         for dep in root.findall("dependencyManagement/dependencies/dependency"):
             g, a = self._resolve(_child(dep, "groupId")), self._resolve(_child(dep, "artifactId"))
-            v = self._resolve(_child(dep, "version"))
+            raw = _child(dep, "version")
+            v = self._resolve(raw)
             if not (g and a and v):
                 continue
             if _child(dep, "scope") == "import" and _child(dep, "type") == "pom":
                 self.imports.append((g, a, v))
+                self.raw_imports.append((g, a, raw))
             else:
                 self.managed.setdefault((g, a), v)
+                self.raw_managed.setdefault((g, a), raw)
 
     def _resolve(self, value, rounds=5):
         for _ in range(rounds):
@@ -139,3 +144,34 @@ def release_versions(group, artifact):
     except ET.ParseError:
         return []
     return [v.text.strip() for v in root.iter("version") if v.text and _RELEASE_RE.match(v.text.strip())]
+
+
+def _prop_name(raw):
+    match = re.fullmatch(r"\$\{([^}]+)\}", raw or "")
+    return match.group(1) if match else None
+
+
+def controlling_property(group, artifact, version, key):
+    """ Which property of this BOM sets the version of `key` (group, artifact).
+
+    -> ("direct", prop, None) when the BOM manages the artifact itself, e.g.
+       tomcat-embed-core: ${tomcat.version};
+       ("import", prop, (bom_group, bom_artifact)) when it comes from an
+       imported BOM whose version is the property, e.g. jackson-databind via
+       jackson-bom: ${jackson-bom.version};
+       None when the version is not overridable through a property.
+    """
+    pom = _load(group, artifact, version)
+    if key in pom.raw_managed:
+        prop = _prop_name(pom.raw_managed[key])
+        return ("direct", prop, None) if prop else None
+    for (g, a, raw), coords in zip(pom.raw_imports, pom.imports):
+        if key in managed_versions(*coords, {key}):
+            prop = _prop_name(raw)
+            return ("import", prop, (g, a)) if prop else None
+    return None
+
+
+def bom_properties(group, artifact, version):
+    """ The resolved <properties> of a BOM (with parent inheritance) """
+    return dict(_load(group, artifact, version).props)

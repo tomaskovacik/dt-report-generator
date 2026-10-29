@@ -128,7 +128,7 @@ def test_spring_boot_platform_picks_lowest_release_clearing_findings():
         pl = dashboard.spring_boot_platform("u", {}, "2.3.5.RELEASE", comps, checks)
     assert pl["members"] == ["tc"]
     assert pl["target"] == "2.7.18" and pl["allFixed"] and pl["effort"] == "minor"
-    assert pl["memberTargets"]["tc"] == {"version": "9.0.83", "fixed": True}
+    assert pl["memberTargets"]["tc"] == {"version": "9.0.83", "fixed": True, "cleared": 1}
     assert pl["inLine"] is None
 
 def test_spring_boot_platform_reports_best_effort_and_same_major_option():
@@ -175,3 +175,32 @@ def test_is_affected_uses_github_ranges_then_dt_ranges():
         assert dashboard.is_affected("u", {}, comp, {"uuid": "v"}, [], "6.1.0") is False
     with patch.object(dashboard, "_dt_ranges", return_value=[]):
         assert dashboard.is_affected("u", {}, comp, {"uuid": "v"}, [], "6.1.0") is None
+
+
+def test_boot_overrides_stay_in_line_and_count_each_finding():
+    maven = {"tc": _comp("tomcat-embed-core", "org.apache.tomcat.embed", "9.0.39"),
+             "sw": _comp("spring-web", "org.springframework", "5.2.10.RELEASE")}
+    coords = {k: (c["group"], c["name"]) for k, c in maven.items()}
+    kev, other = {"uuid": "k", "vulnId": "CVE-KEV", "isKev": True}, {"uuid": "o", "vulnId": "CVE-X"}
+    checks = {"tc": [(kev, [], None)], "sw": [(kev, [], None), (other, [], None)]}
+    controls = {coords["tc"]: ("direct", "tomcat.version", None),
+                coords["sw"]: ("import", "spring-framework.version", ("org.springframework", "spring-framework-bom"))}
+    releases = {("org.apache.tomcat.embed", "tomcat-embed-core"): ["9.0.39", "9.0.80", "9.0.99", "10.1.0", "11.0.1"],
+                ("org.springframework", "spring-framework-bom"): ["5.2.10.RELEASE", "5.2.20.RELEASE", "5.2.25.RELEASE", "5.3.30"]}
+
+    def affected(url, headers, comp, vuln, ghsa_ids, version):
+        if comp["name"] == "tomcat-embed-core":
+            return dashboard.vcmp(version, "9.0.99") < 0
+        return vuln["uuid"] == "o" or dashboard.vcmp(version, "5.2.20") < 0  # CVE-X never fixed in 5.2
+
+    with patch.object(dashboard.bom, "controlling_property", side_effect=lambda *a: controls[a[3]]), \
+         patch.object(dashboard.bom, "bom_properties", return_value={"spring-framework.version": "5.2.10.RELEASE"}), \
+         patch.object(dashboard.bom, "release_versions", side_effect=lambda g, a: releases[(g, a)]), \
+         patch.object(dashboard.bom, "managed_versions", side_effect=lambda g, a, v, wanted: {coords["sw"]: v}), \
+         patch.object(dashboard, "is_affected", side_effect=affected):
+        found = {o["property"]: o for o in dashboard.boot_overrides("u", {}, "2.3.5.RELEASE", maven, coords, ["tc", "sw"], checks)}
+    tc, sw = found["tomcat.version"], found["spring-framework.version"]
+    assert tc["value"] == "9.0.99" and tc["effort"] == "patch" and tc["kevFixed"] == 1  # not 10.x / 11.x
+    assert sw["value"] == "5.2.25.RELEASE"  # BOM properties: latest patch of the 5.2 line, never 5.3
+    assert sw["fixedFindings"] == 1 and sw["findings"] == 2 and sw["kevFixed"] == 1
+    assert sw["fixedMembers"] == [] and sw["clearedVulns"] == {"sw": ["CVE-KEV"]}

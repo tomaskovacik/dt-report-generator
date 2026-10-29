@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New dependency: `Authlib`.
 - **New start page**: a searchable, paged list of DT projects with severity counts and last BOM import. Each project has **Show report** (dashboard in a new tab) and **ZIP** (full report). Several projects can be ticked for one combined dashboard. Backed by `GET /ui/projects`, `GET /projects/<uuid>/report`, `GET /projects/<uuid>/report.zip` and `GET /dashboard?projects=...`.
 - **Upgrade plan follows ownership.** A vulnerable library pinned by Spring Boot is reported as a Spring Boot upgrade. `backend/bom.py` resolves `spring-boot-dependencies` (properties, parents, imported BOMs) to find the lowest Boot release that clears the findings. Version-aligned families (Spring Framework, Jackson, …) are grouped, and every other transitive library shows the dependency path that pulls it in ("via …").
+- **Quick fixes without a Spring Boot upgrade.** For Boot-managed libraries the dashboard proposes version-property overrides (e.g. `tomcat.version=9.0.121`) that stay inside the line the current Boot release supports. Each one is scored per finding and per KEV, labelled patch (*safe*) or minor (*test first*), and comes with Maven / Gradle snippets. It is also summarised in the executive summary.
 - **`.env` support** (python-dotenv): settings load from `.env` next to `app.py` or from `DTRG_ENV_FILE`. `.env.example` documents them.
 
 ### Removed

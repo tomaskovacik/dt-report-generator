@@ -130,6 +130,17 @@ tr.child td.libcol::before { content: "↳ "; color: var(--muted); }
 .toggle { background: none; border: 1px solid var(--border); border-radius: 6px; color: var(--link); cursor: pointer; font: inherit; font-size: 12px; padding: 1px 8px; margin-top: 4px; }
 .ok-mark { color: var(--good-text); font-weight: 700; }
 .bad-mark { color: var(--critical); font-weight: 700; }
+.qf-intro { font-size: 13px; color: var(--ink-2); margin: -4px 0 12px; max-width: 980px; }
+.risk { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 650; white-space: nowrap; }
+.risk .ic { width: 14px; height: 14px; border-radius: 50%; color: #fff; font-size: 10px; display: inline-flex; align-items: center; justify-content: center; }
+.snip { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 10px; margin: 10px 0 4px; }
+.snip > div { position: relative; }
+.snip pre { margin: 0; font-size: 12px; line-height: 1.45; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; overflow-x: auto; color: var(--ink); }
+.snip .cap { font-size: 11px; font-weight: 650; color: var(--ink-2); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .04em; }
+.copy { position: absolute; top: 22px; right: 6px; font-size: 11px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--link); cursor: pointer; padding: 1px 8px; }
+.qf-app { border-top: 1px solid var(--grid); padding-top: 12px; margin-top: 12px; }
+.qf-app:first-of-type { border-top: 0; margin-top: 0; padding-top: 0; }
+.quick { display: block; font-size: 11px; color: var(--good-text); font-weight: 650; }
 .via { display: block; font-size: 11px; color: var(--muted); max-width: 320px; }
 ul.legendlist { margin: 6px 0 0; padding-left: 18px; font-size: 12px; color: var(--ink-2); }
 @media print { .filters, .tabs, #chartTableBtn { display: none; } .card { break-inside: avoid; } body { background: #fff; } }
@@ -156,6 +167,12 @@ ul.legendlist { margin: 6px 0 0; padding-left: 18px; font-size: 12px; color: var
       <li><span class="prio p3">P3 Planned</span> remaining critical / high findings.</li>
       <li>One finding = one vulnerability in one library. The same CVE can appear in several libraries of the same framework.</li>
     </ul>
+  </div>
+
+  <div class="card" id="quickCard" hidden>
+    <h2>Quick fixes without upgrading Spring Boot</h2>
+    <p class="qf-intro">Spring Boot takes the version of every library it bundles from a build property. Setting that property is supported and costs a rebuild plus a test run, not a migration. The values below stay inside the line your Spring Boot release was built for (Tomcat 9.x for Boot 2.x, Spring 5.2.x for Boot 2.3, and so on). <b>Patch</b> overrides are the safe ones. <b>Minor</b> overrides can change behaviour, so read the release notes and test first. They are a stop-gap: the Spring Boot upgrade in the upgrade plan is still needed.</p>
+    <div id="quickFixes"></div>
   </div>
 
   <div class="card chart">
@@ -248,7 +265,14 @@ function drawExec() {
   const pct = n => Math.round(100 * n / Math.max(1, chN));
   $("verdict").innerHTML = `${P.length > 1 ? `Across <b>${P.length} applications</b>, ` : `In <b>${esc(P[0].name)}</b>, `}Dependency-Track reports <b>${crit} critical</b> and <b>${high} high</b> severity findings in third-party libraries. ` +
     (kev.length ? `<b>${kevIds.size} ${kevIds.size === 1 ? "vulnerability" : "vulnerabilities"} (${kev.length} finding${kev.length === 1 ? "" : "s"}) ${kevIds.size === 1 ? "is" : "are"} on CISA’s Known Exploited list</b>, which means attackers are using them right now. ${P.length > 1 ? `They are in ${kevApps.map(esc).join(" and ")}. ` : ""}` : "") +
-    `<b>${pct(hard.length)}% of critical/high findings cannot be fixed by patch updates</b>: they need a major framework upgrade, or no public fix exists for the version in use. The remaining ${pct(easy.length)}% can be fixed with routine dependency updates.`;
+    `<b>${pct(hard.length)}% of critical/high findings cannot be fixed by patch updates</b>: they need a major framework upgrade, or no public fix exists for the version in use. The remaining ${pct(easy.length)}% can be fixed with routine dependency updates.` +
+    (() => {
+      const q = P.flatMap(p => safeQuick(p).map(o => ({p, o})));
+      if (!q.length) return "";
+      const n = q.reduce((a, x) => a + x.o.fixedFindings, 0), k = q.reduce((a, x) => a + x.o.kevFixed, 0);
+      const kevTotal = P.reduce((a, p) => a + p.vulns.filter(v => v.kev).length, 0);
+      return ` <b>Quick win:</b> ${q.length} patch-level version override${q.length > 1 ? "s" : ""} in the build fix <b>${n} findings</b>${k ? `, including <b>${k} of the ${kevTotal} actively exploited ones</b>` : ""}, without upgrading Spring Boot (see Quick fixes).`;
+    })();
   const kpi = (n, l, d, color) => `<div class="kpi"><div class="n">${n}</div><div class="l">${color ? `<span class="dot" style="background:${color}"></span>` : ""}${l}</div>${d ? `<div class="d">${d}</div>` : ""}</div>`;
   $("kpis").innerHTML =
     kpi(crit, "Critical", "findings", "var(--critical)") +
@@ -288,12 +312,56 @@ function drawExec() {
       <td class="num">${r.kev ? `<b style="color:var(--critical)">${r.kev}</b>` : "0"}</td>
       <td class="num">${r.p1}</td>
       <td class="num">${Math.round(r.share * 100)}% <span class="small">(${r.hd}/${r.cN})</span></td>
-      <td class="small">${r.top.map(t => `<div><b style="color:var(--ink)">${esc(t.label)}</b>${t.pl ? `<span class="ptag">platform</span>` : ""} <span class="mono">${esc(t.from)} → ${esc(t.to)}</span> · ${t.n} findings · ${kindCell(t.kind)}</div>`).join("")}</td></tr>`).join("") + `</tbody></table>`;
+      <td class="small">${(q => q.length ? `<div class="quick">Quick fix: ${q.slice(0, 2).map(o => esc(o.property) + "=" + esc(o.value)).join(", ")}${q.length > 2 ? ` +${q.length - 2}` : ""} fixes ${q.reduce((a, o) => a + o.fixedFindings, 0)} findings</div>` : "")(safeQuick(r.p))}${r.top.map(t => `<div><b style="color:var(--ink)">${esc(t.label)}</b>${t.pl ? `<span class="ptag">platform</span>` : ""} <span class="mono">${esc(t.from)} → ${esc(t.to)}</span> · ${t.n} findings · ${kindCell(t.kind)}</div>`).join("")}</td></tr>`).join("") + `</tbody></table>`;
   $("appTable").querySelectorAll("tr.click").forEach(tr => tr.onclick = () => {
     const n = tr.dataset.app;
     state.apps = (state.apps.size === 1 && state.apps.has(n)) ? new Set(P.map(p => p.name)) : new Set([n]);
     render();
     document.querySelector(".tabs").scrollIntoView({behavior: "smooth"});
+  });
+}
+
+/* ---------- quick fixes: Spring Boot version-property overrides ---------- */
+const bootOf = p => (p.platforms || []).find(pl => pl.id === "spring-boot");
+const quickOf = p => (bootOf(p) || {}).overrides || [];
+const safeQuick = p => quickOf(p).filter(o => o.effort === "patch");
+function riskCell(o) {
+  return o.effort === "patch"
+    ? `<span class="risk"><span class="ic" style="background:var(--good)">✓</span>patch: safe</span>`
+    : `<span class="risk"><span class="ic" style="background:var(--warning);color:#1a1a19">!</span>${esc(o.effort)}: test first</span>`;
+}
+function drawQuickFixes() {
+  const apps = P.filter(p => quickOf(p).length);
+  $("quickCard").hidden = !apps.length;
+  if (!apps.length) return;
+  $("quickFixes").innerHTML = apps.map(p => {
+    const boot = bootOf(p), list = quickOf(p);
+    const names = o => [...new Set(o.members.map(k => p.components[k].name))];
+    const fixedAll = list.reduce((a, o) => a + o.fixedFindings, 0), fixedSafe = safeQuick(p).reduce((a, o) => a + o.fixedFindings, 0);
+    const kev = list.reduce((a, o) => a + o.kevFixed, 0);
+    const maven = `<properties>\n${list.map(o => `    <${o.property}>${o.value}</${o.property}>${o.effort === "patch" ? "" : "  <!-- " + o.effort + ": test first -->"}`).join("\n")}\n</properties>`;
+    const gradle = list.map(o => `ext['${o.property}'] = '${o.value}'${o.effort === "patch" ? "" : "  // " + o.effort + ": test first"}`).join("\n");
+    return `<div class="qf-app">
+      <div style="display:flex;flex-wrap:wrap;gap:6px 16px;align-items:baseline;margin-bottom:8px">${appCell(p)}
+        <span class="small">Spring Boot ${esc(boot.current)} · ${list.length} override${list.length > 1 ? "s" : ""} fix <b style="color:var(--ink)">${fixedAll}</b> findings${kev ? `, including <b style="color:var(--critical)">${kev} actively exploited</b>` : ""} · patch-level only: ${fixedSafe}</span></div>
+      <div class="tbl-wrap"><table><thead><tr><th>Property</th><th>Current → set to</th><th>Risk</th><th>Libraries</th><th class="num">Fixes</th><th class="num">KEV</th><th class="num">Left</th></tr></thead><tbody>` +
+      list.map(o => `<tr>
+        <td class="mono"><b>${esc(o.property)}</b></td>
+        <td class="mono">${esc(o.current)} → <span style="color:var(--good-text);font-weight:650">${esc(o.value)}</span></td>
+        <td>${riskCell(o)}</td>
+        <td class="small">${names(o).map(esc).join(", ")}</td>
+        <td class="num"><b>${o.fixedFindings}</b> <span class="small">of ${o.findings}</span></td>
+        <td class="num">${o.kevFixed ? `<b style="color:var(--critical)">${o.kevFixed}</b>` : ""}</td>
+        <td class="num">${o.findings - o.fixedFindings || ""}</td></tr>`).join("") + `</tbody></table></div>
+      <div class="snip">
+        <div><div class="cap">Maven: pom.xml (spring-boot-starter-parent)</div><pre>${esc(maven)}</pre><button class="copy" data-copy="${esc(maven)}">copy</button></div>
+        <div><div class="cap">Gradle: build.gradle (dependency-management plugin)</div><pre>${esc(gradle)}</pre><button class="copy" data-copy="${esc(gradle)}">copy</button></div>
+      </div>
+      <div class="small">If spring-boot-dependencies is imported as a BOM instead of used as the parent, properties have no effect: declare these artifacts (or their own BOM) in &lt;dependencyManagement&gt; before the Spring Boot import.</div>
+    </div>`;
+  }).join("");
+  $("quickFixes").querySelectorAll("[data-copy]").forEach(b => b.onclick = () => {
+    navigator.clipboard && navigator.clipboard.writeText(b.dataset.copy).then(() => { b.textContent = "copied"; setTimeout(() => b.textContent = "copy", 1500); });
   });
 }
 
@@ -317,7 +385,7 @@ function drawFixFirst() {
       <td class="small">${(() => {
         const pls = [...new Set(libs.map(l => platformOf(p, l.c)).filter(Boolean))];
         const own = libs.filter(l => !platformOf(p, l.c));
-        return pls.map(pl => `<div><b style="color:var(--ink)">${esc(pl.name)}</b> <span class="mono">${esc(pl.current)}</span> → ${pl.target ? `<span class="mono" style="color:var(--good-text);font-weight:650">${esc(pl.target)}</span>` : "no fix"} ${kindCell(pl.effort)}<span class="via">${pl.kind === "platform" ? "pins" : "includes"} ${libs.filter(l => platformOf(p, l.c) === pl).map(l => esc(l.c.name)).join(", ")}</span></div>`).join("") +
+        return pls.map(pl => `<div><b style="color:var(--ink)">${esc(pl.name)}</b> <span class="mono">${esc(pl.current)}</span> → ${pl.target ? `<span class="mono" style="color:var(--good-text);font-weight:650">${esc(pl.target)}</span>` : "no fix"} ${kindCell(pl.effort)}<span class="via">${pl.kind === "platform" ? "pins" : "includes"} ${libs.filter(l => platformOf(p, l.c) === pl).map(l => esc(l.c.name)).join(", ")}</span>${(qs => qs.length ? `<span class="quick">quick fix now: ${qs.map(o => esc(o.property) + "=" + esc(o.value)).join(", ")}</span>` : "")((pl.overrides || []).filter(o => libs.some(l => ((o.clearedVulns || {})[l.key] || []).includes(v.id))))}</div>`).join("") +
           own.map(l => `<div><b style="color:var(--ink)">${esc(l.c.name)}</b> <span class="mono">${esc(l.c.version)}</span> → ${l.fix ? `<span class="mono" style="color:var(--good-text);font-weight:650">${esc(l.fix)}</span>` : "no fix"} ${kindCell(l.kind)}${viaCell(l.c)}</div>`).join("");
       })()}</td></tr>`).join("") + `</tbody></table>`
     : `<div class="empty">No P1 findings.</div>`;
@@ -535,7 +603,7 @@ function renderTable() {
         <td>${child ? "" : appCell(r.app)}</td>
         <td class="libcol">${libCell(r.c)}${child ? "" : viaCell(r.c)}</td>
         <td class="mono">${esc(r.c.version)}</td>
-        <td>${target}</td>
+        <td>${target}${(o => o ? `<span class="quick">or now: ${esc(o.property)}=${esc(o.value)} ${o.fixedMembers.includes(r.compKey) ? "✓" : "(partial)"}</span>` : "")(pl && pl.overrides ? pl.overrides.find(o => o.members.includes(r.compKey)) : null)}</td>
         <td>${t ? "" : kindCell(r.kind)}</td>
         <td>${latestCell(r.c)}</td>
         <td class="num">${r.critical || ""}</td><td class="num">${r.high || ""}</td>
@@ -547,6 +615,7 @@ function renderTable() {
       const pl = r.pl, open = state.open.has(r.key);
       const notes = [];
       if (pl.kind === "platform") {
+        if ((pl.overrides || []).length) notes.push(`<span class="quick">quick fix without upgrading: ${pl.overrides.length} version override${pl.overrides.length > 1 ? "s" : ""} fix ${pl.overrides.reduce((a, o) => a + o.fixedFindings, 0)} findings now (see Quick fixes)</span>`);
         if (!pl.allFixed) notes.push(`fixes ${pl.fixedFindings} of ${pl.findings} findings on these libraries${pl.unfixable ? `; ${pl.unfixable} have no fix in any ${esc(pl.name)} release yet` : ""}`);
         if (pl.inLine) notes.push(`staying on ${esc(pl.current.split(".")[0])}.x: ${esc(pl.inLine.version)} fixes only ${pl.inLine.fixedFindings} of ${pl.findings}`);
       } else if (!pl.allFixed) notes.push("some of these libraries have no fixed version published yet");
@@ -612,6 +681,7 @@ function render() {
 $("trees").innerHTML = P.map(p => p.tree ? `<details class="tree"><summary><span class="sw" style="background:${p.color}"></span>${esc(p.name)}</summary><pre>${p.tree}</pre></details>` : `<div class="small">${esc(p.name)}: no graph found</div>`).join("");
 
 drawExec();
+drawQuickFixes();
 drawFixFirst();
 drawChart();
 render();

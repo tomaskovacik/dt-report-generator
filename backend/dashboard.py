@@ -280,15 +280,16 @@ def is_affected(url, headers, comp, vuln, ghsa_ids, version):
     return False
 
 
-def _fixed_at(url, headers, comp, checks, version):
-    """ True when none of the (vuln, ghsa_ids, fix) checks still hit `version` """
+def _cleared(url, headers, comp, checks, version):
+    """ The (vuln, ghsa_ids, fix) checks no longer hitting `version` """
+    out = []
     for vuln, ghsa_ids, fix in checks:
         hit = is_affected(url, headers, comp, vuln, ghsa_ids, version)
         if hit is None:
             hit = not (fix and vcmp(version, fix) >= 0)
-        if hit:
-            return False
-    return True
+        if not hit:
+            out.append(vuln)
+    return out
 
 
 def top_level(graph):
@@ -377,6 +378,89 @@ def _boot_candidates(current):
     return sorted(best.values(), key=vkey)
 
 
+def _override_line_ok(group, current, candidate):
+    """ Overrides stay inside what the Boot release was built against:
+    Spring projects on the same minor line (5.2.x), everything else on the
+    same major (Tomcat 9.0.x, not the jakarta-based 10/11). """
+    parts = 2 if group.startswith("org.springframework") else 1
+    return _line(candidate, parts) == _line(current, parts) and vcmp(candidate, current) > 0
+
+
+def _latest_per_minor(versions):
+    best = {}
+    for v in versions:
+        line = _line(v, 2)
+        if line not in best or vcmp(v, best[line]) > 0:
+            best[line] = v
+    return sorted(best.values(), key=vkey)
+
+
+def boot_overrides(url, headers, boot, maven, coords, members, checks):
+    """ Version-property overrides that fix findings without upgrading Boot.
+
+    Spring Boot reads the version of every library it manages from a
+    property (tomcat.version, jackson-bom.version, ...). Setting it in the
+    build is supported and usually the cheapest fix there is. For each such
+    property this finds the lowest value, inside the line the current Boot
+    release supports, that clears the most findings on the libraries it
+    controls.
+    """
+    props = {}
+    for k in members:
+        ctl = bom.controlling_property(*_BOOT, boot, coords[k])
+        if not ctl or ctl[1] in ("project.version", "revision"):
+            continue
+        kind, prop, bom_coords = ctl
+        props.setdefault(prop, {"kind": kind, "bom": bom_coords, "members": []})["members"].append(k)
+    boot_props = bom.bom_properties(*_BOOT, boot)
+
+    def solve(item):
+        prop, info = item
+        ks = info["members"]
+        if info["kind"] == "direct":
+            group, artifact = coords[ks[0]]
+            current = maven[ks[0]]["version"]
+            candidates = [v for v in bom.release_versions(group, artifact)
+                          if _override_line_ok(group, current, v)]
+            ships = lambda v: {k: v for k in ks}  # noqa: E731
+        else:
+            group, artifact = info["bom"]
+            current = boot_props.get(prop)
+            if not current:
+                return None
+            candidates = _latest_per_minor(v for v in bom.release_versions(group, artifact)
+                                           if _override_line_ok(group, current, v))
+            ships = lambda v: {k: bom.managed_versions(group, artifact, v, {coords[k]}).get(coords[k])  # noqa: E731
+                               for k in ks}
+        total = sum(len(checks[k]) for k in ks)
+        best = None
+        for cand in sorted(candidates, key=vkey):
+            shipped = ships(cand)
+            cleared = {k: _cleared(url, headers, maven[k], checks[k], shipped[k]) if shipped.get(k) else []
+                       for k in ks}
+            score = sum(len(c) for c in cleared.values())
+            if score and (best is None or score > best[1]):
+                best = (cand, score, cleared, shipped)
+            if score == total:
+                break
+        if not best:
+            return None
+        cand, score, cleared, shipped = best
+        fixed = [k for k in ks if len(cleared[k]) == len(checks[k])]
+        return {
+            "property": prop, "current": current, "value": cand,
+            "effort": upgrade_kind(current, cand), "members": ks,
+            "memberVersions": {k: shipped.get(k) for k in ks}, "fixedMembers": fixed,
+            "clearedVulns": {k: [vuln.get("vulnId") for vuln in c] for k, c in cleared.items() if c},
+            "fixedFindings": score, "findings": total,
+            "kevFixed": sum(1 for c in cleared.values() for vuln in c if vuln.get("isKev")),
+        }
+
+    with ThreadPoolExecutor(6) as ex:
+        found = [o for o in ex.map(solve, sorted(props.items())) if o]
+    return sorted(found, key=lambda o: (-o["kevFixed"], -o["fixedFindings"]))
+
+
 def spring_boot_platform(url, headers, boot, comps, checks):
     """ Smallest Spring Boot upgrade whose managed versions clear the findings.
 
@@ -397,14 +481,15 @@ def spring_boot_platform(url, headers, boot, comps, checks):
         result = {}
         for k in members:
             v = ships.get(coords[k])
-            result[k] = {"version": v, "fixed": bool(v) and _fixed_at(url, headers, maven[k], checks[k], v)}
+            n = len(_cleared(url, headers, maven[k], checks[k], v)) if v else 0
+            result[k] = {"version": v, "fixed": n == len(checks[k]), "cleared": n}
         return candidate, result
 
     with ThreadPoolExecutor(6) as ex:
         evaluated = list(ex.map(evaluate, _boot_candidates(boot)))
     if not evaluated:
         return None
-    score = lambda r: sum(len(checks[k]) for k, x in r.items() if x["fixed"])  # noqa: E731
+    score = lambda r: sum(x["cleared"] for x in r.values())  # noqa: E731
     total = sum(len(checks[k]) for k in members)
     full = [(v, r) for v, r in evaluated if score(r) == total]
     # lowest release with the best result: all clear if possible, otherwise
@@ -413,14 +498,18 @@ def spring_boot_platform(url, headers, boot, comps, checks):
     target, result = full[0] if full else best(evaluated)
     same_major = [(v, r) for v, r in evaluated if _line(v, 1) == _line(boot, 1)]
     in_line = best(same_major) if same_major else None
+    try:
+        overrides = boot_overrides(url, headers, boot, maven, coords, members, checks)
+    except Exception as e:  # best effort, the Boot upgrade advice stands on its own
+        logger.warning(f"Spring Boot override analysis failed: {e}")
+        overrides = []
     # findings no Spring Boot release fixes yet (no patched version published)
-    never = sum(len(checks[k]) for k in members
-                if not any(r[k]["fixed"] for _, r in evaluated))
+    never = total - max(score(r) for _, r in evaluated)
     return {
         "id": "spring-boot", "name": "Spring Boot", "kind": "platform",
         "current": boot, "target": target, "effort": upgrade_kind(boot, target),
         "allFixed": bool(full), "fixedFindings": score(result), "findings": total,
-        "unfixable": never,
+        "unfixable": never, "overrides": overrides,
         "members": members, "memberTargets": result,
         "inLine": {"version": in_line[0], "fixedFindings": score(in_line[1])}
         if in_line and in_line[0] != target else None,
