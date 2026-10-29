@@ -34,7 +34,10 @@ Every report ZIP now also has a `dashboard.html`. It is a self-contained page (n
 - **Executive summary**: a generated verdict, KPIs (critical, high, actively exploited per CISA KEV, P1 count, share of findings that need a major upgrade) and a per-app status table with the libraries causing the most risk.
 - **Bar chart** of all findings by severity, with the apps stacked (table view included).
 - **Fix first (P1)**: KEV findings of any severity plus EPSS ≥ 10%. **P2** = critical and network-reachable, or EPSS ≥ 1%. **P3** = the rest of critical/high.
-- **Upgrade plan per library**: minimum version that fixes all its critical/high/KEV findings, effort (patch / minor / major / no fix), latest version, direct vs. transitive.
+- **Upgrade plan**: what to upgrade, not just which jar is vulnerable.
+  - **Spring Boot apps**: libraries whose version comes from Spring Boot's dependency management (Tomcat, Jackson, Spring Framework, Hibernate, …) are grouped under one *Spring Boot X → Y* row. Y is the lowest Boot release (latest patch of a minor line) whose bundled versions fall outside the vulnerable ranges, read from `spring-boot-dependencies` on Maven Central. Each bundled library shows the version Y ships and whether that clears it. The row also says how far staying on the current major gets you.
+  - **Library families** released together (Spring Framework, Spring Security, Jackson, Tomcat, Netty, Hibernate, …) collapse into one row with the version that fixes all members.
+  - **Everything else**: the minimum version that fixes all its critical/high/KEV findings, effort (patch / minor / major / no fix), latest version, and *via …*, the chain of your own dependencies that pulls the library in.
 - **Vulnerability table**: CVE (NVD link), GHSA (GitHub advisory link), CVSS + vector, EPSS, CWE links, fixed-in version. Filterable and searchable.
 - **Dependency tree** from `graph.html`.
 

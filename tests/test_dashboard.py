@@ -240,7 +240,7 @@ def test_single_report_survives_dashboard_failure(client):
 
 def test_api_dashboard_combines_projects(client):
     seen = []
-    def build(url, headers, project, name, tree, direct):
+    def build(url, headers, project, name, tree, direct, graph=None):
         seen.append(project)
         return {"name": name, "uuid": project, "dtLink": "", "counts": {}, "components": {},
                 "vulns": [], "tree": tree}

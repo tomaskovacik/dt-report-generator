@@ -300,7 +300,7 @@ def _project_label(output_dir, fallback):
     label = " ".join(x for x in (project.get("name"), version) if x)
     return label or fallback, summary
 
-def _collect_dashboard_project(url, headers, project, output_dir):
+def _collect_dashboard_project(url, headers, project, output_dir, graph=None):
     """ Dashboard data for one project whose dtrg report sits in output_dir """
     label, summary = _project_label(output_dir, project)
     tree = None
@@ -309,13 +309,13 @@ def _collect_dashboard_project(url, headers, project, output_dir):
         with open(graph_path, encoding="utf-8") as f:
             tree = dashboard.graph_tree(f.read())
     return dashboard.build_project(url, headers, project, label, tree,
-                                   dashboard.direct_map(summary))
+                                   dashboard.direct_map(summary), graph=graph)
 
-def _add_dashboard(config, output_dir):
+def _add_dashboard(config, output_dir, graph=None):
     """ Best effort: drop dashboard.html next to the report, never fail it """
     try:
         url, headers, project = _resolve_params(config)
-        data = _collect_dashboard_project(url, headers, project, output_dir)
+        data = _collect_dashboard_project(url, headers, project, output_dir, graph)
         dashboard.render([data], os.path.join(output_dir, "dashboard.html"))
     except Exception as e:  # pylint: disable=broad-except
         logger.warning(f"Dashboard generation skipped: {e}")
@@ -326,7 +326,7 @@ def _build_report(config, output_dir):
     if not isinstance(report, str):
         return None, report
     with_graph = _create_graph(components, output_dir) if components else False
-    _add_dashboard(config, output_dir)
+    _add_dashboard(config, output_dir, components)
     zip_path = _create_zip(output_dir, with_graph)
     if not zip_path:
         return None, "Failed to build report archive"
@@ -547,7 +547,7 @@ def _build_dashboard(config, projects, output_dir):
                 return None, report
             if components:
                 _create_graph(components, sub)
-            collected.append(_collect_dashboard_project(url, headers, project, sub))
+            collected.append(_collect_dashboard_project(url, headers, project, sub, components))
     except (ValueError, ConnectionError) as e:
         return None, e
     except Exception as e:  # pylint: disable=broad-except

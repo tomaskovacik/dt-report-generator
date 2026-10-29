@@ -25,6 +25,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
+from backend import bom
 from backend._http import requests
 from backend.param_validators import http_timeout, verify_tls
 
@@ -255,6 +256,204 @@ def fix_version(url, headers, comp, vuln, ghsa_ids):
             else "no fixed version published yet"}
 
 
+def is_affected(url, headers, comp, vuln, ghsa_ids, version):
+    """ Is `version` of comp still hit by vuln? True / False / None (no range data) """
+    names = _pkg_names(comp)
+    if enrich_enabled():
+        entries = [adv for gid in ghsa_ids for adv in _ghsa(gid) if adv["pkg"] in names]
+        if entries:
+            return any(in_range(version, adv["range"]) for adv in entries)
+    base = (comp.get("purl") or "").split("@")[0]
+    ranges = _dt_ranges(url, headers, vuln["uuid"])
+    ranges = [a for a in ranges if a["type"] == "PURL" and a["identity"] == base] or \
+        [a for a in ranges if a["type"] == "CPE"]
+    if not ranges:
+        return None
+    for a in ranges:
+        if a["start"] and vcmp(version, a["start"]) < (1 if a["startExcl"] else 0):
+            continue
+        if a["endExcl"] and vcmp(version, a["endExcl"]) >= 0:
+            continue
+        if a["endIncl"] and vcmp(version, a["endIncl"]) > 0:
+            continue
+        return True
+    return False
+
+
+def _fixed_at(url, headers, comp, checks, version):
+    """ True when none of the (vuln, ghsa_ids, fix) checks still hit `version` """
+    for vuln, ghsa_ids, fix in checks:
+        hit = is_affected(url, headers, comp, vuln, ghsa_ids, version)
+        if hit is None:
+            hit = not (fix and vcmp(version, fix) >= 0)
+        if hit:
+            return False
+    return True
+
+
+def top_level(graph):
+    """ uuids of the dependencies the application declares itself.
+
+    DT marks the SBOM's direct dependencies. Some generators (Spring Boot
+    fat jars, multi-module builds) put the application module itself there,
+    so with only one or two direct entries their children are used instead.
+    """
+    direct = {k for k, v in graph.items() if v.get("is_direct_dependency")}
+    if 0 < len(direct) <= 2:
+        children = {c for k in direct for c in graph[k].get("dependencies") or [] if c in graph}
+        if children:
+            return children - direct
+    return direct
+
+
+def dependency_paths(graph, targets):
+    """ {uuid: [top-level name, ..., parent name]} shortest path down to each target """
+    tops = top_level(graph)
+    parents = {}
+    for k, v in graph.items():
+        for c in v.get("dependencies") or []:
+            parents.setdefault(c, []).append(k)
+    out = {}
+    for target in targets:
+        if target in tops or target not in graph:
+            out[target] = []
+            continue
+        prev, frontier, hit = {target: None}, [target], None
+        while frontier and not hit:
+            nxt = []
+            for node in frontier:
+                for par in parents.get(node, []):
+                    if par in prev:
+                        continue
+                    prev[par] = node
+                    if par in tops:
+                        hit = par
+                        break
+                    nxt.append(par)
+                if hit:
+                    break
+            frontier = nxt
+        path, node = [], hit
+        while node and node != target:
+            path.append(graph[node]["name"])
+            node = prev[node]
+        out[target] = path
+    return out
+
+
+# Version-aligned library families. Members ship together, so the fix is
+# one family upgrade, not one bump per artifact.
+FAMILIES = [
+    ("Spring Framework", lambda g, n: g == "org.springframework"),
+    ("Spring Security", lambda g, n: g == "org.springframework.security"),
+    ("Spring Boot", lambda g, n: g == "org.springframework.boot"),
+    ("Jackson", lambda g, n: g.startswith("com.fasterxml.jackson")),
+    ("Tomcat", lambda g, n: g == "org.apache.tomcat.embed"),
+    ("Netty", lambda g, n: g == "io.netty"),
+    ("Hibernate", lambda g, n: g in ("org.hibernate", "org.hibernate.orm")),
+    ("Logback", lambda g, n: g == "ch.qos.logback"),
+    ("Bouncy Castle", lambda g, n: g == "org.bouncycastle"),
+    ("Thymeleaf", lambda g, n: g == "org.thymeleaf"),
+]
+_BOOT = ("org.springframework.boot", "spring-boot-dependencies")
+
+
+def _boot_version(graph):
+    for v in (graph or {}).values():
+        if v.get("group") == "org.springframework.boot" and v.get("name") == "spring-boot":
+            return v.get("version")
+    return None
+
+
+def _boot_candidates(current):
+    """ Latest patch of every Spring Boot minor line newer than `current` """
+    best = {}
+    for v in bom.release_versions(*_BOOT):
+        if vcmp(v, current) <= 0:
+            continue
+        line = _line(v, 2)
+        if line not in best or vcmp(v, best[line]) > 0:
+            best[line] = v
+    return sorted(best.values(), key=vkey)
+
+
+def spring_boot_platform(url, headers, boot, comps, checks):
+    """ Smallest Spring Boot upgrade whose managed versions clear the findings.
+
+    comps: {uuid: comp}; checks: {uuid: [(vuln, ghsa_ids, fix)]}. Only
+    libraries whose current version is exactly what `boot` pins count as
+    Boot-managed; anything else was overridden in the build and is left out.
+    """
+    maven = {k: c for k, c in comps.items() if (c.get("purl") or "").startswith("pkg:maven/")}
+    coords = {k: (c["group"], c["name"]) for k, c in maven.items()}
+    pinned = bom.managed_versions(*_BOOT, boot, set(coords.values()))
+    members = [k for k, gc in coords.items() if pinned.get(gc) == maven[k]["version"]]
+    if not members:
+        return None
+    wanted = {coords[k] for k in members}
+
+    def evaluate(candidate):
+        ships = bom.managed_versions(*_BOOT, candidate, wanted)
+        result = {}
+        for k in members:
+            v = ships.get(coords[k])
+            result[k] = {"version": v, "fixed": bool(v) and _fixed_at(url, headers, maven[k], checks[k], v)}
+        return candidate, result
+
+    with ThreadPoolExecutor(6) as ex:
+        evaluated = list(ex.map(evaluate, _boot_candidates(boot)))
+    if not evaluated:
+        return None
+    score = lambda r: sum(len(checks[k]) for k, x in r.items() if x["fixed"])  # noqa: E731
+    total = sum(len(checks[k]) for k in members)
+    full = [(v, r) for v, r in evaluated if score(r) == total]
+    # lowest release with the best result: all clear if possible, otherwise
+    # the smallest jump that fixes as much as any release can today
+    best = lambda cands: min(cands, key=lambda e: (-score(e[1]), vkey(e[0])))  # noqa: E731
+    target, result = full[0] if full else best(evaluated)
+    same_major = [(v, r) for v, r in evaluated if _line(v, 1) == _line(boot, 1)]
+    in_line = best(same_major) if same_major else None
+    # findings no Spring Boot release fixes yet (no patched version published)
+    never = sum(len(checks[k]) for k in members
+                if not any(r[k]["fixed"] for _, r in evaluated))
+    return {
+        "id": "spring-boot", "name": "Spring Boot", "kind": "platform",
+        "current": boot, "target": target, "effort": upgrade_kind(boot, target),
+        "allFixed": bool(full), "fixedFindings": score(result), "findings": total,
+        "unfixable": never,
+        "members": members, "memberTargets": result,
+        "inLine": {"version": in_line[0], "fixedFindings": score(in_line[1])}
+        if in_line and in_line[0] != target else None,
+    }
+
+
+def family_platforms(comps, fixes, exclude):
+    """ Group version-aligned libraries (Spring Framework, Jackson, ...) """
+    groups = {}
+    for k, c in comps.items():
+        if k in exclude:
+            continue
+        for name, match in FAMILIES:
+            if match(c["group"], c["name"]):
+                groups.setdefault(name, []).append(k)
+                break
+    out = []
+    for name, members in groups.items():
+        if len(members) < 2:
+            continue
+        targets = [fixes[k] for k in members if fixes[k]]
+        target = max(targets, key=vkey) if targets else None
+        current = min((comps[k]["version"] for k in members), key=vkey)
+        out.append({
+            "id": "family:" + name, "name": name, "kind": "family",
+            "current": current, "target": target,
+            "effort": upgrade_kind(current, target) if target else "none",
+            "allFixed": all(fixes[k] for k in members),
+            "members": members,
+        })
+    return out
+
+
 # ---------- DT ----------
 def _findings(url, headers, project):
     out, page = [], 1
@@ -276,11 +475,14 @@ def graph_tree(graph_html):
     return match.group(1) if match else None
 
 
-def build_project(url, headers, project, name, tree=None, direct=None):
+def build_project(url, headers, project, name, tree=None, direct=None, graph=None):
     """ Collect one project's dashboard data.
 
     url/headers come from param_validators (url ends in /api/v1/), `tree` is
-    graph_tree() output, `direct` maps (name, version) -> is direct dependency.
+    graph_tree() output, `direct` maps (name, version) -> is direct dependency,
+    `graph` is create_report's component dict (uuid -> name, group, version,
+    dependencies, is_direct_dependency) used for "pulled in by" paths and
+    the Spring Boot / library family upgrade targets.
     """
     logger.info(f"Collecting dashboard data for {name}")
     raw = _findings(url, headers, project)
@@ -304,7 +506,7 @@ def build_project(url, headers, project, name, tree=None, direct=None):
         fixes = list(ex.map(
             lambda j: fix_version(url, headers, j[0]["component"], j[0]["vulnerability"], j[2]), jobs))
 
-    comps, vulns = {}, []
+    comps, vulns, checks, comp_fix = {}, [], {}, {}
     for (f, cves, ghsas), fx in zip(jobs, fixes):
         vuln, comp = f["vulnerability"], f["component"]
         comps.setdefault(comp["uuid"], {
@@ -312,6 +514,10 @@ def build_project(url, headers, project, name, tree=None, direct=None):
             "latest": comp.get("latestVersion"), "purl": comp.get("purl"),
             "direct": (direct or {}).get((comp["name"], comp.get("version") or "")),
         })
+        checks.setdefault(comp["uuid"], []).append((vuln, ghsas, fx["fix"]))
+        if fx["fix"] and (comp["uuid"] not in comp_fix or vcmp(fx["fix"], comp_fix[comp["uuid"]]) > 0):
+            comp_fix[comp["uuid"]] = fx["fix"]
+        comp_fix.setdefault(comp["uuid"], None)
         vulns.append({
             "sev": (vuln.get("severity") or "UNASSIGNED").lower(), "id": vuln.get("vulnId"),
             "source": vuln.get("source"), "cves": cves, "ghsas": ghsas,
@@ -324,9 +530,32 @@ def build_project(url, headers, project, name, tree=None, direct=None):
             "fixNote": fx["note"], "fixAssumed": fx["assumed"],
         })
     vulns.sort(key=lambda x: (x["sev"] != "critical", -(x["cvss"] or 0)))
+
+    platforms = []
+    if graph:
+        tops = top_level(graph)
+        for k, path in dependency_paths(graph, comps).items():
+            comps[k]["via"] = path
+            if k in graph:
+                comps[k]["direct"] = k in tops
+        boot = _boot_version(graph)
+        if boot and enrich_enabled():
+            try:
+                sb = spring_boot_platform(url, headers, boot, comps, checks)
+            except Exception as e:  # enrichment must never break the report
+                logger.warning(f"Spring Boot upgrade analysis failed: {e}")
+                sb = None
+            if sb:
+                platforms.append(sb)
+    managed = {k for p in platforms for k in p["members"]}
+    platforms += family_platforms(comps, comp_fix, managed)
+    for p in platforms:
+        for k in p["members"]:
+            comps[k].setdefault("platform", p["id"])
     return {"name": name, "uuid": project,
             "dtLink": f"{url.split('/api/v1/')[0]}/projects/{project}",
-            "counts": counts, "components": comps, "vulns": vulns, "tree": tree}
+            "counts": counts, "components": comps, "vulns": vulns, "tree": tree,
+            "platforms": platforms}
 
 
 def direct_map(summary):

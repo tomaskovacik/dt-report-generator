@@ -122,6 +122,15 @@ tr.click { cursor: pointer; }
 .kind.major { color: var(--critical); } .kind.none { color: var(--critical); }
 .kind.minor { color: var(--ink); } .kind.patch { color: var(--good-text); }
 .why { font-size: 12px; color: var(--ink-2); }
+tr.group td { border-top: 2px solid var(--axis); background: var(--surface-2); }
+tr.child td { background: var(--surface); }
+tr.child td.libcol { padding-left: 26px; }
+tr.child td.libcol::before { content: "↳ "; color: var(--muted); }
+.ptag { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-2); border: 1px solid var(--axis); border-radius: 4px; padding: 0 4px; margin-left: 4px; vertical-align: 1px; }
+.toggle { background: none; border: 1px solid var(--border); border-radius: 6px; color: var(--link); cursor: pointer; font: inherit; font-size: 12px; padding: 1px 8px; margin-top: 4px; }
+.ok-mark { color: var(--good-text); font-weight: 700; }
+.bad-mark { color: var(--critical); font-weight: 700; }
+.via { display: block; font-size: 11px; color: var(--muted); max-width: 320px; }
 ul.legendlist { margin: 6px 0 0; padding-left: 18px; font-size: 12px; color: var(--ink-2); }
 @media print { .filters, .tabs, #chartTableBtn { display: none; } .card { break-inside: avoid; } body { background: #fff; } }
 </style>
@@ -203,7 +212,7 @@ P.forEach((p, i) => p.color = `var(--s${(i % 8) + 1})`);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 const $ = id => document.getElementById(id);
 
-const state = {apps: new Set(P.map(p => p.name)), sevs: new Set(["critical", "high", "other"]), kev: false, noFix: false, p1: false, q: "", tab: "upgrades", sort: {upgrades: ["prio", -1], vulns: ["prio", -1]}};
+const state = {open: new Set(), apps: new Set(P.map(p => p.name)), sevs: new Set(["critical", "high", "other"]), kev: false, noFix: false, p1: false, q: "", tab: "upgrades", sort: {upgrades: ["prio", -1], vulns: ["prio", -1]}};
 
 $("meta").textContent = `Generated ${DATA.generated} · ${P.length} application${P.length > 1 ? "s" : ""}`;
 
@@ -254,14 +263,24 @@ function drawExec() {
     const k = vs.filter(v => v.kev), pp1 = vs.filter(v => prio(v) === 1), hd = c.filter(v => v.fixKind === "major" || v.fixKind === "none");
     const share = c.length ? hd.length / c.length : 0;
     // libraries driving the risk: most critical/high findings, needing a major upgrade first
+    // a platform / family upgrade (Spring Boot, Spring Framework, ...) is one
+    // action covering many libraries, so it is listed as one offender
     const libs = {};
-    c.forEach(v => { const l = libs[v.comp] ||= {c: p.components[v.comp], n: 0, kind: null}; l.n++; if (v.fix && (l.kind == null || KIND_RANK[v.fixKind] > KIND_RANK[l.kind])) l.kind = v.fixKind; });
+    c.forEach(v => {
+      const comp = p.components[v.comp], pl = platformOf(p, comp);
+      const key = pl ? "pl:" + pl.id : v.comp;
+      const l = libs[key] ||= pl
+        ? {label: pl.name, from: pl.current, to: pl.target || "?", n: 0, kind: pl.effort, pl: true}
+        : {label: comp.name, from: comp.version, to: comp.latest || "?", n: 0, kind: null};
+      l.n++;
+      if (!pl && v.fix && (l.kind == null || KIND_RANK[v.fixKind] > KIND_RANK[l.kind])) l.kind = v.fixKind;
+    });
     Object.values(libs).forEach(l => l.kind ??= "none");
-    const top = Object.values(libs).sort((a, b) => (KIND_RANK[b.kind] >= 2) - (KIND_RANK[a.kind] >= 2) || b.n - a.n).slice(0, 3);
+    const top = Object.values(libs).sort((a, b) => b.pl - a.pl || (KIND_RANK[b.kind] >= 2) - (KIND_RANK[a.kind] >= 2) || b.n - a.n).slice(0, 3);
     const status = k.length ? ["var(--critical)", "!", "Exploited: act now"] : share >= 0.4 ? ["var(--serious)", "↑", "Platform upgrade required"] : ["var(--warning)", "•", "Dependency updates"];
     return {p, crit: p.counts.CRITICAL, high: p.counts.HIGH, kev: new Set(k.map(v => v.cves[0] || v.id)).size, p1: pp1.length, share, hd: hd.length, cN: c.length, top, status};
   }).sort((a, b) => b.kev - a.kev || b.p1 - a.p1 || b.crit - a.crit);
-  $("appTable").innerHTML = `<table><thead><tr><th>Application</th><th>Status</th><th class="num">Critical</th><th class="num">High</th><th class="num">Exploited (KEV)</th><th class="num">P1</th><th class="num">Major upgrade or no fix</th><th>Main offenders (current → latest)</th></tr></thead><tbody>` +
+  $("appTable").innerHTML = `<table><thead><tr><th>Application</th><th>Status</th><th class="num">Critical</th><th class="num">High</th><th class="num">Exploited (KEV)</th><th class="num">P1</th><th class="num">Major upgrade or no fix</th><th>Main upgrades needed (current → target)</th></tr></thead><tbody>` +
     rows.map(r => `<tr class="click" data-app="${esc(r.p.name)}" title="Filter tables below to this app">
       <td>${appCell(r.p)} <a href="${esc(r.p.dtLink)}" target="_blank" rel="noopener" class="small" onclick="event.stopPropagation()">DT ↗</a></td>
       <td><span class="status"><span class="ic" style="background:${r.status[0]}">${r.status[1]}</span>${r.status[2]}</span></td>
@@ -269,7 +288,7 @@ function drawExec() {
       <td class="num">${r.kev ? `<b style="color:var(--critical)">${r.kev}</b>` : "0"}</td>
       <td class="num">${r.p1}</td>
       <td class="num">${Math.round(r.share * 100)}% <span class="small">(${r.hd}/${r.cN})</span></td>
-      <td class="small">${r.top.map(t => `<div><b style="color:var(--ink)">${esc(t.c.name)}</b> <span class="mono">${esc(t.c.version)} → ${esc(t.c.latest || "?")}</span> · ${t.n} findings · ${kindCell(t.kind)}</div>`).join("")}</td></tr>`).join("") + `</tbody></table>`;
+      <td class="small">${r.top.map(t => `<div><b style="color:var(--ink)">${esc(t.label)}</b>${t.pl ? `<span class="ptag">platform</span>` : ""} <span class="mono">${esc(t.from)} → ${esc(t.to)}</span> · ${t.n} findings · ${kindCell(t.kind)}</div>`).join("")}</td></tr>`).join("") + `</tbody></table>`;
   $("appTable").querySelectorAll("tr.click").forEach(tr => tr.onclick = () => {
     const n = tr.dataset.app;
     state.apps = (state.apps.size === 1 && state.apps.has(n)) ? new Set(P.map(p => p.name)) : new Set([n]);
@@ -295,7 +314,12 @@ function drawFixFirst() {
       <td>${sevBadge(v.sev)} ${v.kev ? `<span class="tag kev">KEV</span>` : ""}<div class="mono ids">${idLinks(v)}</div><div class="small title">${esc(v.title)}</div></td>
       <td class="why">${esc(why(v))}</td>
       <td class="num">${v.cvss ?? "–"}</td>
-      <td class="small">${libs.map(l => `<div><b style="color:var(--ink)">${esc(l.c.name)}</b> <span class="mono">${esc(l.c.version)}</span> → ${l.fix ? `<span class="mono" style="color:var(--good-text);font-weight:650">${esc(l.fix)}</span>` : "no fix"} ${kindCell(l.kind)}</div>`).join("")}</td></tr>`).join("") + `</tbody></table>`
+      <td class="small">${(() => {
+        const pls = [...new Set(libs.map(l => platformOf(p, l.c)).filter(Boolean))];
+        const own = libs.filter(l => !platformOf(p, l.c));
+        return pls.map(pl => `<div><b style="color:var(--ink)">${esc(pl.name)}</b> <span class="mono">${esc(pl.current)}</span> → ${pl.target ? `<span class="mono" style="color:var(--good-text);font-weight:650">${esc(pl.target)}</span>` : "no fix"} ${kindCell(pl.effort)}<span class="via">${pl.kind === "platform" ? "pins" : "includes"} ${libs.filter(l => platformOf(p, l.c) === pl).map(l => esc(l.c.name)).join(", ")}</span></div>`).join("") +
+          own.map(l => `<div><b style="color:var(--ink)">${esc(l.c.name)}</b> <span class="mono">${esc(l.c.version)}</span> → ${l.fix ? `<span class="mono" style="color:var(--good-text);font-weight:650">${esc(l.fix)}</span>` : "no fix"} ${kindCell(l.kind)}${viaCell(l.c)}</div>`).join("");
+      })()}</td></tr>`).join("") + `</tbody></table>`
     : `<div class="empty">No P1 findings.</div>`;
 }
 
@@ -403,7 +427,7 @@ function upgradeRows(vulns) {
   const m = new Map();
   vulns.forEach(v => {
     const k = v.app.name + "|" + v.comp;
-    if (!m.has(k)) m.set(k, {app: v.app, c: v.c, critical: 0, high: 0, other: 0, cvss: null, kev: false, fix: null, unfixed: 0, ids: [], kind: null, prio: 3, notes: new Set(), assumed: false});
+    if (!m.has(k)) m.set(k, {compKey: v.comp, app: v.app, c: v.c, critical: 0, high: 0, other: 0, cvss: null, kev: false, fix: null, unfixed: 0, ids: [], kind: null, prio: 3, notes: new Set(), assumed: false});
     const r = m.get(k);
     r[v.sev === "critical" || v.sev === "high" ? v.sev : "other"]++; r.kev ||= v.kev; r.ids.push(v.cves[0] || v.id);
     r.prio = Math.min(r.prio, prio(v));
@@ -444,6 +468,19 @@ function idLinks(v) {
 }
 const appCell = p => `<span class="badge" style="font-weight:500"><span class="sw" style="background:${p.color}"></span>${esc(p.name)}</span>`;
 const libCell = c => `<span class="lib"><b>${esc(c.name)}</b>${c.group ? `<span class="grp">${esc(c.group)}</span>` : ""}</span>`;
+const platformOf = (app, c) => c.platform ? (app.platforms || []).find(pl => pl.id === c.platform) : null;
+// "via a → b → c" (last three hops) for transitive libraries, from the SBOM graph
+function viaCell(c) {
+  if (!c.via) return c.direct === true ? `<span class="via">direct dependency</span>` : "";
+  if (!c.via.length) return `<span class="via">direct dependency</span>`;
+  const hops = c.via.length > 3 ? ["…", ...c.via.slice(-3)] : c.via;
+  return `<span class="via" title="${esc(c.via.join(" → "))}">via ${hops.map(esc).join(" → ")}</span>`;
+}
+function platformNote(app, c) {
+  const pl = platformOf(app, c);
+  if (!pl) return viaCell(c);
+  return `<span class="via">${pl.kind === "platform" ? "managed by" : "part of"} ${esc(pl.name)} ${esc(pl.current)}${pl.target ? ` → upgrade ${esc(pl.name)} to ${esc(pl.target)}` : ""}</span>`;
+}
 function latestCell(c) {
   if (!c.latest) return `<span class="small">unknown</span>`;
   if (vcmp(c.latest, c.version) <= 0) return `<span class="mono">${esc(c.latest)}</span> <span class="tag ok">up to date</span>`;
@@ -467,22 +504,68 @@ function renderTable() {
   let head, body, n;
   if (state.tab === "upgrades") {
     const rows = upgradeRows(vulns);
-    const get = (r, k) => ({prio: -r.prio * 1e6 + r.critical * 1000 + r.high, app: r.app.name, lib: r.c.name, critical: r.critical * 1000 + r.high, high: r.high, cvss: r.cvss, kind: KIND_RANK[r.kind], kev: r.kev ? 1 : 0}[k]);
-    sortRows(rows, key, dir, get);
-    n = rows.length;
-    const cols = [["prio", "Priority"], ["app", "App"], ["lib", "Library"], [null, "Current"], [null, "Upgrade to (fixes all listed)"], ["kind", "Effort"], [null, "Latest"], ["critical", "Critical", "num"], ["high", "High", "num"], ["cvss", "Max CVSS", "num"], [null, "Vulnerabilities"]];
-    head = cols;
-    body = rows.map(r => `<tr>
-      <td>${prioBadge(r.prio)} ${r.kev ? `<span class="tag kev">KEV</span>` : ""}</td>
-      <td>${appCell(r.app)}</td><td>${libCell(r.c)}${r.c.direct === true ? `<span class="small">direct dependency</span>` : r.c.direct === false ? `<span class="small">transitive</span>` : ""}</td>
-      <td class="mono">${esc(r.c.version)}</td>
-      <td>${fixCell(r.fix, r.unfixed)}${(n => n ? `<div class="small">${esc(n)}</div>` : "")([...r.notes].find(n => /commercial/.test(n)) || [...r.notes][0])}</td>
-      <td>${kindCell(r.kind)}</td>
-      <td>${latestCell(r.c)}</td>
-      <td class="num">${r.critical || ""}</td><td class="num">${r.high || ""}</td>
-      <td class="num">${r.cvss ?? "–"}</td>
-      <td class="small">${(u => u.slice(0, 6).map(esc).join(", ") + (u.length > 6 ? ` +${u.length - 6} more` : ""))([...new Set(r.ids)])}</td></tr>`).join("");
-    $("tableNote").textContent = "Sorted by priority. Effort = the largest jump needed to fix every listed finding on that library. “Upgrade to” is the lowest version that fixes every critical/high finding on that library within its release line (GitHub Advisory DB first-patched version, falling back to DT’s affected-version range). Check the changelog before jumping majors.";
+    // fold libraries under the platform / family that decides their version
+    const groups = new Map(), items = [];
+    rows.forEach(r => {
+      const pl = platformOf(r.app, r.c);
+      if (!pl) { items.push(r); return; }
+      const key = r.app.name + "|" + pl.id;
+      if (!groups.has(key)) {
+        const g = {group: true, key, pl, app: r.app, children: [], critical: 0, high: 0, other: 0, prio: 3, kev: false, cvss: null, ids: []};
+        groups.set(key, g); items.push(g);
+      }
+      const g = groups.get(key);
+      g.children.push(r); g.critical += r.critical; g.high += r.high; g.other += r.other;
+      g.prio = Math.min(g.prio, r.prio); g.kev ||= r.kev; g.ids.push(...r.ids);
+      if (r.cvss != null) g.cvss = Math.max(g.cvss ?? 0, r.cvss);
+    });
+    const get = (r, k) => ({prio: -r.prio * 1e6 + r.critical * 1000 + r.high, app: r.app.name, lib: r.group ? r.pl.name : r.c.name, critical: r.critical * 1000 + r.high, high: r.high, cvss: r.cvss, kind: KIND_RANK[r.group ? r.pl.effort : r.kind], kev: r.kev ? 1 : 0}[k]);
+    sortRows(items, key, dir, get);
+    items.forEach(g => g.group && sortRows(g.children, "critical", -1, get));
+    n = items.length;
+    head = [["prio", "Priority"], ["app", "App"], ["lib", "Library"], [null, "Current"], [null, "Upgrade to (fixes all listed)"], ["kind", "Effort"], [null, "Latest"], ["critical", "Critical", "num"], ["high", "High", "num"], ["cvss", "Max CVSS", "num"], [null, "Vulnerabilities"]];
+    const idsCell = ids => (u => u.slice(0, 6).map(esc).join(", ") + (u.length > 6 ? ` +${u.length - 6} more` : ""))([...new Set(ids)]);
+    const libRow = (r, child, pl) => {
+      const t = pl && pl.memberTargets ? pl.memberTargets[r.compKey] : null;
+      const target = t
+        ? (t.version ? `<span class="mono">${esc(pl.name)} ${esc(pl.target)} ships ${esc(t.version)}</span> ${t.fixed ? `<span class="ok-mark" title="no listed finding left">✓</span>` : `<span class="bad-mark" title="still vulnerable at this version">✗ still vulnerable</span>`}` : `<span class="small">not in ${esc(pl.name)} ${esc(pl.target)}: artifact dropped or renamed, migrate to its replacement</span>`)
+        : `${fixCell(r.fix, r.unfixed)}${(x => x ? `<div class="small">${esc(x)}</div>` : "")([...r.notes].find(x => /commercial/.test(x)) || [...r.notes][0])}`;
+      return `<tr class="${child ? "child" : ""}" ${child ? `data-parent="${esc(child)}" ${state.open.has(child) ? "" : "hidden"}` : ""}>
+        <td>${child ? "" : prioBadge(r.prio)} ${r.kev ? `<span class="tag kev">KEV</span>` : ""}</td>
+        <td>${child ? "" : appCell(r.app)}</td>
+        <td class="libcol">${libCell(r.c)}${child ? "" : viaCell(r.c)}</td>
+        <td class="mono">${esc(r.c.version)}</td>
+        <td>${target}</td>
+        <td>${t ? "" : kindCell(r.kind)}</td>
+        <td>${latestCell(r.c)}</td>
+        <td class="num">${r.critical || ""}</td><td class="num">${r.high || ""}</td>
+        <td class="num">${r.cvss ?? "–"}</td>
+        <td class="small">${idsCell(r.ids)}</td></tr>`;
+    };
+    body = items.map(r => {
+      if (!r.group) return libRow(r);
+      const pl = r.pl, open = state.open.has(r.key);
+      const notes = [];
+      if (pl.kind === "platform") {
+        if (!pl.allFixed) notes.push(`fixes ${pl.fixedFindings} of ${pl.findings} findings on these libraries${pl.unfixable ? `; ${pl.unfixable} have no fix in any ${esc(pl.name)} release yet` : ""}`);
+        if (pl.inLine) notes.push(`staying on ${esc(pl.current.split(".")[0])}.x: ${esc(pl.inLine.version)} fixes only ${pl.inLine.fixedFindings} of ${pl.findings}`);
+      } else if (!pl.allFixed) notes.push("some of these libraries have no fixed version published yet");
+      return `<tr class="group">
+        <td>${prioBadge(r.prio)} ${r.kev ? `<span class="tag kev">KEV</span>` : ""}</td>
+        <td>${appCell(r.app)}</td>
+        <td><span class="lib"><b>${esc(pl.name)}</b><span class="ptag">${pl.kind === "platform" ? "platform" : "family"}</span>
+          <span class="grp">${pl.kind === "platform" ? `pins the versions of ${r.children.length} vulnerable libraries` : `${r.children.length} libraries released together`}</span></span>
+          <button class="toggle" data-toggle="${esc(r.key)}">${open ? "▾ hide" : "▸ show"} libraries</button></td>
+        <td class="mono">${esc(pl.current)}</td>
+        <td>${pl.target ? `<span class="mono" style="color:var(--good-text);font-weight:650">${pl.kind === "platform" ? "" : "≥ "}${esc(pl.target)}</span>` : `<span class="small">no fix published</span>`}${notes.map(x => `<div class="small">${x}</div>`).join("")}</td>
+        <td>${kindCell(pl.effort)}</td>
+        <td></td>
+        <td class="num"><b>${r.critical || ""}</b></td><td class="num"><b>${r.high || ""}</b></td>
+        <td class="num">${r.cvss ?? "–"}</td>
+        <td class="small">${r.children.slice(0, 5).map(c => esc(c.c.name)).join(", ")}${r.children.length > 5 ? ` +${r.children.length - 5} more` : ""}</td></tr>` +
+        r.children.map(c => libRow(c, r.key, pl)).join("");
+    }).join("");
+    $("tableNote").textContent = "Sorted by priority. Libraries whose version is decided by a platform (Spring Boot’s dependency management) or released as a family (Spring Framework, Jackson, …) are grouped under it: upgrade the platform, not the single jar. For Spring Boot the target is the lowest release whose bundled versions are outside the vulnerable ranges (versions read from spring-boot-dependencies on Maven Central). “via” shows which of your dependencies pulls a library in. Other fix versions: GitHub Advisory DB first-patched version, falling back to DT’s affected-version ranges.";
   } else {
     const get = (v, k) => ({prio: -prio(v) * 100 + (v.cvss ?? 0), sev: v.sev === "critical" ? 2 : 1, id: v.cves[0] || v.id, cvss: v.cvss, epss: v.epss, app: v.app.name, lib: v.c.name}[k]);
     sortRows(vulns, key, dir, get);
@@ -497,7 +580,7 @@ function renderTable() {
         <td class="num" title="${v.epssPct != null ? "percentile " + (v.epssPct * 100).toFixed(1) + "%" : ""}">${v.epss != null ? (v.epss * 100).toFixed(v.epss < 0.01 ? 2 : 1) + "%" : "–"}</td>
         <td>${v.cwes.length ? v.cwes.map(w => `<a href="${cweLink(w.id)}" target="_blank" rel="noopener" title="${esc(w.name)}" class="mono" style="display:block;white-space:nowrap">CWE-${w.id}</a>`).join("") : `<span class="small">–</span>`}</td>
         <td>${appCell(v.app)}</td>
-        <td>${libCell(v.c)}<span class="mono small">${esc(v.c.version)}</span></td>
+        <td>${libCell(v.c)}<span class="mono small">${esc(v.c.version)}</span>${platformNote(v.app, v.c)}</td>
         <td>${v.fix ? `<span class="mono" style="color:var(--good-text);font-weight:650">${esc(v.fix)}</span>` : `<span class="small">no fix</span>`}<div>${kindCell(v.fixKind)}</div>${v.fixNote && !/^no fixed version/.test(v.fixNote) ? `<div class="small">${esc(v.fixNote)}</div>` : ""}</td>
         <td>${latestCell(v.c)}</td>
         <td class="title">${esc(v.title)}${v.cwes.length ? `<div class="small">${v.cwes.map(w => esc(w.name)).join(" · ")}</div>` : ""}</td></tr>`;
@@ -505,6 +588,11 @@ function renderTable() {
     $("tableNote").textContent = "CVSS = v3 base score (hover for vector). EPSS = probability of exploitation in the next 30 days (hover for percentile). KEV = listed in CISA Known Exploited Vulnerabilities.";
   }
   $("table").innerHTML = n ? `<table><thead><tr>${head.map(([k, l, c]) => `<th ${k ? `data-k="${k}"` : ""} class="${c || ""} ${k === key ? (dir > 0 ? "asc" : "desc") : ""}">${l}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table>` : `<div class="empty">Nothing matches these filters.</div>`;
+  $("table").querySelectorAll("[data-toggle]").forEach(b => b.onclick = () => {
+    const k = b.dataset.toggle;
+    state.open.has(k) ? state.open.delete(k) : state.open.add(k);
+    renderTable();
+  });
   $("table").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => {
     const k = th.dataset.k, cur = state.sort[state.tab];
     state.sort[state.tab] = [k, cur[0] === k ? -cur[1] : (["app", "lib", "id"].includes(k) ? 1 : -1)];
