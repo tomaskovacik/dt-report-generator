@@ -6,3 +6,5 @@ test/
 reports/result*
 reports/reports.zip
 reports/graph.html
+# management dashboard outputs
+.dashboard-cache.json
