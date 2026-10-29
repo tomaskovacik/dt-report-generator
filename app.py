@@ -31,7 +31,7 @@ from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.utils import secure_filename
 
-from backend import dashboard
+from backend import auth, dashboard
 from backend.dependency_graph import get_graph
 from backend.param_validators import projects_page_size
 from backend.projects import get_projects
@@ -137,6 +137,9 @@ swagger = Swagger(app, config={
         },
     },
 })
+
+# Optional Microsoft Entra ID / OIDC login for the browser UI (DTRG_OIDC_*)
+auth.init_app(app)
 
 
 def _presented_api_key():

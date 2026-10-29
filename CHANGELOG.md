@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Management dashboard.** Every report ZIP gets a self-contained `dashboard.html`: an executive summary with a verdict, KPIs and per-app status; a severity bar chart; KEV / EPSS based P1-P3 priorities; a per-library upgrade plan; and a filterable vulnerability table with NVD, GHSA and CWE links. Fix versions come from the GitHub Advisory DB and DT / NVD ranges, are checked against Maven Central / npm, and are flagged when a fix ships only in a commercial build.
 - **Combined dashboard for several projects**: a "Combined dashboard" toggle on the form, and `POST /api/v1/reports/dashboard` with `{"projects": [uuid, ...]}`. Up to `DTRG_DASHBOARD_MAX_PROJECTS` (default 8).
 - New env vars `DTRG_DASHBOARD_ENRICH`, `DTRG_GITHUB_TOKEN`, `DTRG_DASHBOARD_MAX_PROJECTS`.
+- **Optional single sign-on for the browser UI** (Microsoft Entra ID, or any OIDC provider): authorization code flow with PKCE and nonce, ID token validated by Authlib, Entra tenant pinned, optional `DTRG_OIDC_ALLOWED_USERS` allowlist, session renewed on login, sign-out also ends the Entra session. `/health` and `/api/v1/*` (API key) are unaffected. Enabled by `DTRG_OIDC_CLIENT_ID` + `DTRG_OIDC_CLIENT_SECRET` + `DTRG_OIDC_TENANT_ID`.
+- New dependency: `Authlib`.
 
 ## [2.2.0]
 

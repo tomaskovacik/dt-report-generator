@@ -39,6 +39,26 @@ Every report ZIP now also has a `dashboard.html`. It is a self-contained page (n
 
 Fix versions come from the GitHub Advisory DB (`first_patched_version`) and DT's affected-version ranges (incl. NVD CPE ranges). Each candidate is checked on Maven Central / npm. When the only fix for your release line is a commercial build (typical for Spring / Tomcat EOL lines), the page says so and suggests the newest public release instead. These lookups are best effort: if they fail, the fix column stays empty and the report is still produced. Set `DTRG_DASHBOARD_ENRICH=false` on air-gapped installs. The DT API key needs `VIEW_PORTFOLIO` and `VIEW_VULNERABILITY`.
 
+### Single sign-on (Microsoft Entra ID)
+The browser UI can require a Microsoft login (OpenID Connect, authorization code + PKCE). It is off by default. When it is on, the form, downloads, dashboard and Swagger UI need a signed-in user. `/health` stays open for probes, and `/api/v1/*` keeps using `DTRG_API_KEY` for CI.
+
+1. In the Entra admin center go to **App registrations → New registration**:
+   - Supported account types: *Accounts in this organizational directory only*.
+   - Redirect URI: platform **Web**, `http://localhost:5000/auth/callback`. Use your real `https://<host>/auth/callback` when running behind a proxy.
+2. **Certificates & secrets → New client secret**, and copy the *Value*.
+3. Note the **Application (client) ID** and **Directory (tenant) ID** on the Overview page.
+4. Recommended: **Enterprise applications → dtrg → Properties → Assignment required = Yes**, then add the allowed users / groups under *Users and groups*. Everyone else is stopped by Entra before reaching dtrg.
+
+```
+export DTRG_OIDC_TENANT_ID="<directory-tenant-id>"
+export DTRG_OIDC_CLIENT_ID="<application-client-id>"
+export DTRG_OIDC_CLIENT_SECRET="<client-secret-value>"
+export DTRG_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_hex(32))')"  # keep sessions across restarts
+# optional extra filter inside dtrg
+export DTRG_OIDC_ALLOWED_USERS="*@example.com,contractor@partner.com"
+```
+Behind a TLS proxy also set `DTRG_SECURE_COOKIES=true` and `DTRG_OIDC_REDIRECT_URI=https://<host>/auth/callback`. Other OIDC providers (Keycloak, Okta, Google) work through `DTRG_OIDC_METADATA_URL`.
+
 ## CI usage
 For pipelines a JSON API is exposed alongside the form. It returns the same ZIP, but does not need a browser session and is suitable for `curl` from a build job.
 
@@ -184,6 +204,14 @@ All environment variables:
 * DTRG_DASHBOARD_ENRICH - when `true` (default), the dashboard looks up fix versions on `api.github.com/advisories`, `repo1.maven.org` and `registry.npmjs.org`. Set `false` for air-gapped installs; fix versions then come from DT's affected-version ranges only.
 * DTRG_GITHUB_TOKEN - optional GitHub token for the advisory lookups (rate limit 60 → 5000 requests/hour). Any token works; it needs no scopes.
 * DTRG_DASHBOARD_MAX_PROJECTS - max projects per combined dashboard (default and maximum 8, the number of distinct chart colors).
+* DTRG_OIDC_CLIENT_ID - turns on SSO for the browser UI (see [Single sign-on](#single-sign-on-microsoft-entra-id)). Requires DTRG_OIDC_CLIENT_SECRET and DTRG_OIDC_TENANT_ID.
+* DTRG_OIDC_CLIENT_SECRET - client secret of the Entra app registration.
+* DTRG_OIDC_TENANT_ID - Entra Directory (tenant) ID. Only users of this tenant can sign in (`tid` claim is checked); multi-tenant values like `organizations` are refused.
+* DTRG_OIDC_ALLOWED_USERS - optional comma-separated allowlist of usernames / emails, glob patterns allowed (`*@example.com`). Empty = everyone the identity provider lets through.
+* DTRG_OIDC_REDIRECT_URI - override the callback URL (default derived from the request, e.g. `http://localhost:5000/auth/callback`). Set it when dtrg runs behind a reverse proxy.
+* DTRG_OIDC_POST_LOGOUT_URI - where Entra sends the browser after sign-out (default: the dtrg start page).
+* DTRG_OIDC_METADATA_URL - OIDC discovery URL for a non-Microsoft provider. Replaces the Entra tenant check.
+* DTRG_SESSION_HOURS - how long a login lasts (default 8).
 * CVEPAAS_URL - [CVE-PaaS](https://github.com/denimoll/CVE-PaaS) address
 ## Development
 Tests live under `tests/` and run with pytest:

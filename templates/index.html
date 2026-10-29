@@ -55,8 +55,14 @@
 
 {% block content %}
 <div id="wrapper">
+    {% if sso_user %}
+    <div style="text-align: right; font-size: 0.9em;">
+        Signed in as <b>{{ sso_user.name or sso_user.username }}</b>
+        &middot; <a href="{{ url_for('auth.logout') }}">Sign out</a>
+    </div>
+    {% endif %}
     <h2>
-        Welcome, Boy!
+        Welcome{% if sso_user and sso_user.name %}, {{ sso_user.name.split(' ')[0] }}{% else %}, Boy{% endif %}!
     </h2>
     <br>
     <div id="form" align="center">
