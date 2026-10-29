@@ -1,245 +1,249 @@
 {% extends "base.html" %}
-{% from 'bootstrap5/form.html' import render_form %}
 
-{% block title %}DT report{% endblock %}
+{% block title %}DT reports{% endblock %}
 
 {% block head %}
     {{ super() }}
-    <style type="text/css">
-        body {
-            background-color: #fff;
+    <style>
+        :root {
+            --sev-critical: #d03b3b; --sev-high: #ec835a; --sev-medium: #fab219; --sev-low: #898781;
         }
-        #wrapper {
-            text-align: center;
-            width: 1000px;
-            min-width: 600px;
-            height: 100%;
-            margin: auto auto;
-            border-radius: 5px;
-            padding: 40px;
-        }
-        #form {
-            width: 500px;
-            background-color: #ccccccaa;
-            margin: auto auto;
-            margin-bottom: 50px;
-            padding: 20px;
-            border-radius: 25px;
-        }
-        #severities {
-            height: 140px;
-            overflow: hidden;
-        }
-        .select2-container {
-            text-align: left;
-            border: 1px solid #ced4da;
-            border-radius: .375rem;
-        }
-
+        body { background: #f6f6f4; }
+        .wrap { max-width: 1280px; margin: 0 auto; padding: 24px 16px 64px; }
+        .topbar { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: baseline; justify-content: space-between; margin-bottom: 18px; }
+        .topbar h1 { font-size: 22px; margin: 0; font-weight: 650; }
+        .meta { color: #6c6b66; font-size: 13px; }
+        .card { border: 1px solid rgba(0,0,0,.08); border-radius: 10px; }
+        .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px; border-bottom: 1px solid #ecebe6; }
+        .toolbar input[type=search] { flex: 1 1 260px; min-width: 0; }
+        .selected { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px; border-bottom: 1px solid #ecebe6; }
+        .selected:empty { display: none; }
+        .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; background: #eef1f6; border-radius: 999px; padding: 2px 4px 2px 10px; }
+        .chip button { border: 0; background: none; line-height: 1; padding: 0 4px; color: #555; }
+        table { margin: 0 !important; font-size: 14px; }
+        th { font-size: 12px; color: #6c6b66; font-weight: 600; white-space: nowrap; background: #fbfbfa !important; }
+        td { vertical-align: middle; }
+        .num { text-align: right; font-variant-numeric: tabular-nums; width: 72px; }
+        .sev { display: inline-flex; align-items: center; justify-content: flex-end; gap: 5px; min-width: 40px; font-weight: 600; }
+        .sev .dot { width: 8px; height: 8px; border-radius: 50%; }
+        .sev.zero { color: #b5b4ae; font-weight: 400; }
+        .sev.zero .dot { opacity: .3; }
+        .pname { font-weight: 600; }
+        .parent { display: block; font-size: 12px; color: #8a8983; }
+        .tag { font-size: 11px; background: #f0efea; color: #55544f; border-radius: 4px; padding: 0 5px; margin-right: 3px; white-space: nowrap; }
+        .when { color: #6c6b66; font-size: 13px; white-space: nowrap; }
+        .actions { white-space: nowrap; text-align: right; }
+        .footer-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 12px; font-size: 13px; color: #6c6b66; }
+        .empty { padding: 32px !important; text-align: center; color: #8a8983; }
+        tr.is-selected td { background: #f3f7fd !important; }
     </style>
-    <script
-        src="https://code.jquery.com/jquery-3.7.1.min.js"
-        integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo="
-        crossorigin="anonymous">
-    </script>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/css/select2.min.css"
-        rel="stylesheet"
-        integrity="sha512-nMNlpuaDPrqlEls3IX/Q56H36qvBASwb3ipuo3MxeWbsQB1881ox0cRv7UPTgBlriqoynt35KjEwgGUeUXIPnw=="
-        crossorigin="anonymous"
-        referrerpolicy="no-referrer" />
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/js/select2.min.js"
-        integrity="sha512-2ImtlRlf2VVmiGZsjm9bEyhjGW4dU7B6TNwh/hx/iSByxNENtj3WVE6o/9Lj4TJeVXPi4bnOIMXFIJJAeufa0A=="
-        crossorigin="anonymous"
-        referrerpolicy="no-referrer"></script>
 {% endblock %}
 
 {% block content %}
-<div id="wrapper">
-    {% if sso_user %}
-    <div style="text-align: right; font-size: 0.9em;">
-        Signed in as <b>{{ sso_user.name or sso_user.username }}</b>
-        &middot; <a href="{{ url_for('auth.logout') }}">Sign out</a>
+<div class="wrap">
+    <div class="topbar">
+        <div>
+            <h1>Dependency-Track reports</h1>
+            {% if dt_configured %}<div class="meta">Source: <a href="{{ dt_url }}" target="_blank" rel="noopener">{{ dt_url }}</a></div>{% endif %}
+        </div>
+        {% if sso_user %}
+        <div class="meta">
+            Signed in as <b>{{ sso_user.name or sso_user.username }}</b> &middot;
+            <a href="{{ url_for('auth.logout') }}">Sign out</a>
+        </div>
+        {% endif %}
     </div>
+
+    {% if not dt_configured %}
+    <div class="alert alert-warning">
+        Dependency-Track is not configured. Set <code>DT_URL</code> and <code>DT_TOKEN</code> in
+        <code>.env</code> next to <code>app.py</code> (see <code>.env.example</code>) and restart dtrg.
+    </div>
+    {% else %}
+    <div class="card bg-white">
+        <div class="toolbar">
+            <input type="search" id="q" class="form-control form-control-sm" placeholder="Search projects by name, or paste a UUID" autocomplete="off">
+            <button class="btn btn-sm btn-dark" id="combined" disabled>Show combined dashboard</button>
+            <button class="btn btn-sm btn-link" id="clearSel" hidden>Clear selection</button>
+        </div>
+        <div class="selected" id="selected"></div>
+        <div class="table-responsive">
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        <th style="width: 32px"></th>
+                        <th>Project</th>
+                        <th>Version</th>
+                        <th class="num">Critical</th>
+                        <th class="num">High</th>
+                        <th class="num">Medium</th>
+                        <th class="num">Low</th>
+                        <th>Last BOM</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="rows"><tr><td colspan="9" class="empty">Loading projects…</td></tr></tbody>
+            </table>
+        </div>
+        <div class="footer-row">
+            <span id="count"></span>
+            <span>
+                <button class="btn btn-sm btn-outline-secondary" id="prev">‹ Prev</button>
+                <button class="btn btn-sm btn-outline-secondary" id="next">Next ›</button>
+            </span>
+        </div>
+    </div>
+    <div class="alert alert-danger mt-3" id="err" hidden></div>
+    <p class="meta mt-3" style="font-size: 12px; color: #8a8983">
+        <b>Show report</b> opens the project's management dashboard in a new tab.
+        <b>ZIP</b> downloads the full report (Word, Excel, summary.json, dependency graph, dashboard).
+        Tick up to {{ max_projects }} projects for one combined dashboard. A report takes 10–30 seconds to build.
+    </p>
     {% endif %}
-    <h2>
-        Welcome{% if sso_user and sso_user.name %}, {{ sso_user.name.split(' ')[0] }}{% else %}, Boy{% endif %}!
-    </h2>
-    <br>
-    <div id="form" align="center">
-        <h4>
-            Generate report<br>from Dependency Track
-        </h4>
-        {{ render_form(form, action=url_for("get_report")) }}
-        <br>
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    <div class="alert alert-{{ category }}" role="alert" id="div_flash">
-                        {{ message }}
-                        <input type="button" class="btn-close" onclick="removeFlash()" style="float: right">
-                    </div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %} 
-    </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
-    <script>
-        function removeFlash() {
-            const element = document.getElementById("div_flash");
-            element.remove();
+{{ super() }}
+{% if dt_configured %}
+<script>
+(function () {
+    const MAX = {{ max_projects | tojson }};
+    const state = {page: 1, search: "", total: 0, pageSize: {{ page_size | tojson }}, selected: new Map()};
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+    const SEV = [["critical", "var(--sev-critical)"], ["high", "var(--sev-high)"], ["medium", "var(--sev-medium)"], ["low", "var(--sev-low)"]];
+
+    function ago(ms) {
+        if (!ms) return "never";
+        const d = (Date.now() - ms) / 1000;
+        if (d < 3600) return Math.max(1, Math.round(d / 60)) + " min ago";
+        if (d < 86400) return Math.round(d / 3600) + " h ago";
+        if (d < 86400 * 60) return Math.round(d / 86400) + " days ago";
+        return new Date(ms).toISOString().slice(0, 10);
+    }
+
+    // open the tab synchronously (keeps the popup blocker happy), show a
+    // placeholder while the server builds the report, then navigate there
+    function openReport(url, label) {
+        const w = window.open("", "_blank");
+        if (!w) { location.href = url; return; }
+        w.document.write(`<!doctype html><title>Building report…</title><body style="font:15px system-ui,sans-serif;color:#52514e;display:flex;align-items:center;justify-content:center;height:90vh;margin:0">
+            <div style="text-align:center"><div style="font-size:18px;font-weight:600;color:#0b0b0b;margin-bottom:6px">Building report for ${esc(label)}…</div>
+            Fetching findings from Dependency-Track and looking up fix versions. This takes 10–30 seconds.</div></body>`);
+        w.document.close();
+        w.location.href = url;
+    }
+
+    async function downloadZip(btn, uuid) {
+        const old = btn.textContent;
+        btn.disabled = true; btn.textContent = "Building…";
+        try {
+            const res = await fetch(`/projects/${encodeURIComponent(uuid)}/report.zip`, {credentials: "same-origin"});
+            if (res.redirected || res.status === 401) { location.reload(); return; }
+            if (!res.ok) throw new Error("Report generation failed. Check server logs for details.");
+            const name = (/filename="?([^";]+)"?/.exec(res.headers.get("Content-Disposition") || "") || [])[1] || "report.zip";
+            const a = document.createElement("a");
+            a.href = URL.createObjectURL(await res.blob());
+            a.download = name;
+            document.body.appendChild(a); a.click(); a.remove();
+            setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+        } catch (e) {
+            showError(e.message);
+        } finally {
+            btn.disabled = false; btn.textContent = old;
         }
-    </script>
-    <script>
-        $(document).ready(function() {
-            // Project A's name, captured on selection. Project B's ajax
-            // is locked to this name so the diff is always between two
-            // versions of the same project.
-            var projectAName = null;
+    }
 
-            var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    function showError(msg) { const e = $("err"); e.textContent = msg; e.hidden = !msg; }
 
-            function buildAjaxConfig(opts) {
-                var nameLockFn = opts.nameLockFn || null;  // returns the locked name, or null
-                return {
-                    url: "/projects/get_all",
-                    type: "POST",
-                    delay: 300,
-                    // project A caches by search term; project B's locked name
-                    // can change so we re-fetch every time
-                    cache: !nameLockFn,
-                    data: function (params) {
-                        sessionStorage.setItem("url", $("#url").val());
-                        sessionStorage.setItem("token", $("#token").val());
-                        var typed = (params.term || "").trim();
-                        var lockedName = nameLockFn ? nameLockFn() : null;
-                        // UUID input always overrides the name lock (server
-                        // does a direct /project/<uuid> lookup). Otherwise,
-                        // when a name lock is active, we send "lockedName
-                        // <typed>" so the server filters by name and we
-                        // further narrow by what the user typed
-                        // (version / UUID-fragment / anything matching
-                        // "<name> <version>" on the server side).
-                        var searchText;
-                        if (UUID_RE.test(typed)) {
-                            searchText = typed;
-                        } else if (lockedName) {
-                            searchText = typed
-                                ? lockedName + " " + typed
-                                : lockedName;
-                        } else {
-                            searchText = typed;
-                        }
-                        return {
-                            "url": $("#url").val(),
-                            "token": $("#token").val(),
-                            "searchText": searchText,
-                            "pageNumber": params.page || 1,
-                            "csrf_token": $('input[name="csrf_token"]').val()
-                        };
-                    },
-                    transport: function (params, success, failure) {
-                        const hasUrl = $("#url").val() || {{ has_env_url | tojson }}; // it's correct
-                        const hasToken = $("#token").val() || {{ has_env_token | tojson }}; // it's correct
-                        if (!hasUrl || !hasToken) {
-                            success({items: [], total: 0, pageSize: 0});
-                            return;
-                        }
-                        if (nameLockFn && !nameLockFn()) {
-                            // project_b without project A selected yet
-                            success({items: [], total: 0, pageSize: 0});
-                            return;
-                        }
-                        return $.ajax(params).then(function (data, _status, xhr) {
-                            success({
-                                items: data,
-                                total: parseInt(xhr.getResponseHeader("X-Total-Count")) || 0,
-                                pageSize: parseInt(xhr.getResponseHeader("X-Page-Size")) || data.length
-                            });
-                        }, failure);
-                    },
-                    processResults: function (response, params) {
-                        params.page = params.page || 1;
-                        var lockedName = nameLockFn ? nameLockFn() : null;
-                        var items = response.items;
-                        if (lockedName) {
-                            // DT's searchText is substring; pin to exact match here
-                            items = items.filter(function (p) { return p.name === lockedName; });
-                        }
-                        var pageSize = response.pageSize || response.items.length || 1;
-                        var label = function (p) {
-                            return p.name + " " + (p.version || "") + " (" + p.uuid + ")";
-                        };
-                        return {
-                            results: items.map(function (p) {
-                                var l = label(p);
-                                return { id: l, text: l, name: p.name };
-                            }),
-                            pagination: {
-                                more: (params.page * pageSize) < response.total
-                            }
-                        };
-                    }
-                };
-            }
+    const label = p => p.name + (p.version ? " " + p.version : "");
 
-            $("#project").select2({
-                placeholder: "Type to search projects (URL and Token must be filled)",
-                allowClear: true,
-                minimumInputLength: 0,
-                ajax: buildAjaxConfig({})
-            });
-            $("#projects").select2({
-                placeholder: "Pick up to 8 projects for one combined dashboard",
-                allowClear: true,
-                minimumInputLength: 0,
-                ajax: buildAjaxConfig({})
-            });
-            $("#project_b").select2({
-                placeholder: "Pick the comparison version of the same project",
-                allowClear: true,
-                minimumInputLength: 0,
-                ajax: buildAjaxConfig({ nameLockFn: function () { return projectAName; } })
-            });
-
-            // Track project A's name and reset project_b on every change
-            $("#project").on("select2:select", function (e) {
-                projectAName = (e.params.data && e.params.data.name) || null;
-                $("#project_b").val(null).trigger("change");
-            });
-            $("#project").on("select2:clear", function () {
-                projectAName = null;
-                $("#project_b").val(null).trigger("change");
-            });
-
-            // Mode toggles: compare shows project_b and posts to the diff
-            // route; dashboard swaps the single project picker for a multi
-            // select and posts to the dashboard route. The two are exclusive.
-            var $form = $("form").first();
-            var actionSingle = "{{ url_for('get_report') }}";
-            var actionDiff = "{{ url_for('get_diff_report') }}";
-            var actionDashboard = "{{ url_for('get_dashboard') }}";
-            var group = function (sel) { return $(sel).closest(".mb-3, .form-group"); };
-            var $projectGroup = group("#project");
-            var $projectBGroup = group("#project_b");
-            var $projectsGroup = group("#projects");
-            var $compareGroup = group("#compare");
-            function syncModeUI() {
-                var dash = $("#dashboard").is(":checked");
-                if (dash) $("#compare").prop("checked", false);
-                var cmp = $("#compare").is(":checked");
-                $projectGroup.toggle(!dash);
-                $("#project").prop("required", !dash);
-                $compareGroup.toggle(!dash);
-                $projectBGroup.toggle(cmp);
-                $projectsGroup.toggle(dash);
-                $form.attr("action", dash ? actionDashboard : cmp ? actionDiff : actionSingle);
-                $("#submit").val(dash ? "Get dashboard" : cmp ? "Get diff report" : "Get report");
-            }
-            syncModeUI();
-            $("#compare, #dashboard").on("change", syncModeUI);
+    function renderSelection() {
+        const n = state.selected.size;
+        $("combined").disabled = n < 1 || n > MAX;
+        $("combined").textContent = n ? `Show combined dashboard (${n})` : "Show combined dashboard";
+        $("clearSel").hidden = !n;
+        $("selected").innerHTML = [...state.selected].map(([uuid, name]) =>
+            `<span class="chip">${esc(name)}<button data-unsel="${esc(uuid)}" title="Remove">×</button></span>`).join("") +
+            (n > MAX ? `<span class="text-danger small">At most ${MAX} projects per dashboard</span>` : "");
+        document.querySelectorAll("#rows input[type=checkbox]").forEach(cb => {
+            cb.checked = state.selected.has(cb.dataset.uuid);
+            cb.closest("tr").classList.toggle("is-selected", cb.checked);
         });
-    </script>
+    }
+
+    function renderRows(items) {
+        if (!items.length) { $("rows").innerHTML = `<tr><td colspan="9" class="empty">No projects match.</td></tr>`; return; }
+        $("rows").innerHTML = items.map(p => `<tr>
+            <td><input type="checkbox" class="form-check-input" data-uuid="${esc(p.uuid)}" data-label="${esc(label(p))}" aria-label="Select ${esc(p.name)}"></td>
+            <td>${p.parent ? `<span class="parent">${esc(p.parent)} /</span>` : ""}<span class="pname">${esc(p.name)}</span>
+                ${p.tags.length ? `<div>${p.tags.slice(0, 4).map(t => `<span class="tag">${esc(t)}</span>`).join("")}</div>` : ""}</td>
+            <td class="text-muted">${esc(p.version || "–")}</td>
+            ${SEV.map(([k, c]) => { const v = p.metrics[k] || 0;
+                return `<td class="num"><span class="sev ${v ? "" : "zero"}"><span class="dot" style="background:${c}"></span>${v}</span></td>`; }).join("")}
+            <td class="when" title="${p.lastBomImport ? new Date(p.lastBomImport).toLocaleString() : ""}">${ago(p.lastBomImport)}</td>
+            <td class="actions">
+                <button class="btn btn-sm btn-primary" data-view="${esc(p.uuid)}" data-label="${esc(label(p))}">Show report</button>
+                <button class="btn btn-sm btn-outline-secondary" data-zip="${esc(p.uuid)}" title="Download ZIP (docx, xlsx, json, graph, dashboard)">ZIP</button>
+            </td></tr>`).join("");
+        renderSelection();
+    }
+
+    let seq = 0;
+    async function load() {
+        const mine = ++seq;
+        showError("");
+        try {
+            const qs = new URLSearchParams({search: state.search, page: state.page});
+            const res = await fetch(`/ui/projects?${qs}`, {credentials: "same-origin"});
+            if (res.status === 401) { location.reload(); return; }
+            const body = await res.json();
+            if (mine !== seq) return;
+            if (!res.ok) throw new Error(body.error || "Request to Dependency-Track failed");
+            state.total = body.total; state.pageSize = body.pageSize || state.pageSize;
+            renderRows(body.items);
+            const from = state.total ? (state.page - 1) * state.pageSize + 1 : 0;
+            $("count").textContent = `${from}–${Math.min(state.page * state.pageSize, state.total)} of ${state.total} projects`;
+            $("prev").disabled = state.page <= 1;
+            $("next").disabled = state.page * state.pageSize >= state.total;
+        } catch (e) {
+            if (mine !== seq) return;
+            $("rows").innerHTML = `<tr><td colspan="9" class="empty">Could not load projects.</td></tr>`;
+            showError(e.message);
+        }
+    }
+
+    let timer;
+    $("q").addEventListener("input", e => {
+        clearTimeout(timer);
+        timer = setTimeout(() => { state.search = e.target.value.trim(); state.page = 1; load(); }, 300);
+    });
+    $("prev").onclick = () => { state.page--; load(); };
+    $("next").onclick = () => { state.page++; load(); };
+    $("rows").addEventListener("click", e => {
+        const view = e.target.closest("[data-view]"), zip = e.target.closest("[data-zip]");
+        if (view) openReport(`/projects/${encodeURIComponent(view.dataset.view)}/report`, view.dataset.label);
+        if (zip) downloadZip(zip, zip.dataset.zip);
+    });
+    $("rows").addEventListener("change", e => {
+        const cb = e.target.closest("input[type=checkbox]");
+        if (!cb) return;
+        cb.checked ? state.selected.set(cb.dataset.uuid, cb.dataset.label) : state.selected.delete(cb.dataset.uuid);
+        renderSelection();
+    });
+    $("selected").addEventListener("click", e => {
+        const b = e.target.closest("[data-unsel]");
+        if (b) { state.selected.delete(b.dataset.unsel); renderSelection(); }
+    });
+    $("clearSel").onclick = () => { state.selected.clear(); renderSelection(); };
+    $("combined").onclick = () => {
+        const qs = new URLSearchParams();
+        state.selected.forEach((_, uuid) => qs.append("projects", uuid));
+        openReport(`/dashboard?${qs}`, `${state.selected.size} projects`);
+    };
+    load();
+})();
+</script>
+{% endif %}
 {% endblock %}

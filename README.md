@@ -4,6 +4,10 @@ Tool for create reports from [Dependency Track](https://dependencytrack.org/) in
 More information about tool and how to use it can be found in the articles on habr [1](https://habr.com/ru/articles/860536/), [2](https://habr.com/ru/articles/900276/) (rus).
 ## Getting started
 ### Installation and start
+Configuration lives in a `.env` file next to `app.py` (real environment variables win over it):
+```
+cp .env.example .env    # set DT_URL and DT_TOKEN, optionally SSO / API key
+```
 №1. Python
 ```
 git clone <this repo>
@@ -14,18 +18,15 @@ python ./app.py
 №2. Docker
 ```
 docker pull ghcr.io/denimoll/dt-report-generator:latest
-docker run --name dtrg -d -p 5000:5000 ghcr.io/denimoll/dt-report-generator
+docker run --name dtrg -d -p 5000:5000 --env-file .env ghcr.io/denimoll/dt-report-generator
 ```
 ### Usage
-1. Open in browser [localhost:5000](http://localhost:5000)
-2. Fill out the form:
-    - URL - DT address (format "protocol"://"domain"). For example, [https://dependencytrack.org](https://dependencytrack.org). The path to the API is automatically substituted - */api/v1/*
-    - Token - API key ([how to get](https://docs.dependencytrack.org/integrations/rest-api/))
-    - Project - project ID (Object Identifier parameter in Project Details or identifier in the URL after ".../projects/")
-3. Click "Get report"
-4. Wait
+1. Open [localhost:5000](http://localhost:5000). The start page lists the Dependency-Track projects with their critical / high / medium / low counts, newest BOM first. Search by name, or paste a project UUID.
+2. **Show report** opens the project's management dashboard in a new tab.
+3. **ZIP** downloads the full report: `result.docx`, `result.xlsx`, `summary.json`, `graph.html` and `dashboard.html`.
+4. Tick several projects (up to 8) and click **Show combined dashboard** for one page covering all of them.
 
-To combine several projects into one management dashboard, tick **Combined dashboard (several projects)**, pick up to 8 projects and click "Get dashboard". You get a single `dashboard.html` (see [Management dashboard](#management-dashboard)).
+The DT URL and API key are never entered in the browser. They come from `DT_URL` / `DT_TOKEN` in `.env`. The version-diff report is available through the API (`/api/v1/reports/diff`, see below).
 
 ### Management dashboard
 Every report ZIP now also has a `dashboard.html`. It is a self-contained page (no external scripts) written for people who need the "how bad is it and what do we do" answer, not the raw finding list:

@@ -6,3 +6,4 @@ test/
 reports/result*
 reports/reports.zip
 reports/graph.html
+.env

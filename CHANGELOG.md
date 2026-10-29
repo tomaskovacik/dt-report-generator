@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New env vars `DTRG_DASHBOARD_ENRICH`, `DTRG_GITHUB_TOKEN`, `DTRG_DASHBOARD_MAX_PROJECTS`.
 - **Optional single sign-on for the browser UI** (Microsoft Entra ID, or any OIDC provider): authorization code flow with PKCE and nonce, ID token validated by Authlib, Entra tenant pinned, optional `DTRG_OIDC_ALLOWED_USERS` allowlist, session renewed on login, sign-out also ends the Entra session. `/health` and `/api/v1/*` (API key) are unaffected. Enabled by `DTRG_OIDC_CLIENT_ID` + `DTRG_OIDC_CLIENT_SECRET` + `DTRG_OIDC_TENANT_ID`.
 - New dependency: `Authlib`.
+- **New start page**: a searchable, paged list of DT projects with severity counts and last BOM import. Each project has **Show report** (dashboard in a new tab) and **ZIP** (full report). Several projects can be ticked for one combined dashboard. Backed by `GET /ui/projects`, `GET /projects/<uuid>/report`, `GET /projects/<uuid>/report.zip` and `GET /dashboard?projects=...`.
+- **`.env` support** (python-dotenv): settings load from `.env` next to `app.py` or from `DTRG_ENV_FILE`. `.env.example` documents them.
+
+### Removed
+
+- The URL / token / project form and its POST routes (`/reports/get_report`, `/reports/diff`, `/reports/dashboard`, `/projects/get_all`) and `form.py`. DT credentials now come only from `DT_URL` / `DT_TOKEN`. The `/api/v1/*` endpoints are unchanged; the diff report is API-only now.
 
 ## [2.2.0]
 

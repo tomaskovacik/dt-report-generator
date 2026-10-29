@@ -25,7 +25,7 @@ def _make_app():
     app.add_url_rule("/", "index", lambda: "form")
     app.add_url_rule("/health", "health", lambda: "ok")
     app.add_url_rule("/api/v1/projects", "api", lambda: "api", methods=["POST"])
-    app.add_url_rule("/projects/get_all", "ajax", lambda: "[]", methods=["POST"])
+    app.add_url_rule("/ui/projects", "ajax", lambda: "[]")
     app.add_url_rule("/reports/get_report", "report", lambda: "zip", methods=["POST"])
     app.add_url_rule("/apidocs/", "docs", lambda: "docs")
     auth.init_app(app)
@@ -86,7 +86,7 @@ def test_browser_page_redirects_to_login(client):
     assert res.headers["Location"].startswith("/auth/login?next=/apidocs/")
 
 def test_ajax_gets_401_not_redirect(client):
-    res = client.post("/projects/get_all")
+    res = client.get("/ui/projects")
     assert res.status_code == 401
     assert res.get_json() == {"error": "login required"}
 

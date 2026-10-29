@@ -16,10 +16,21 @@ def client(monkeypatch):
         yield c
 
 
-def test_index_renders(client):
+def test_index_renders_project_list(client, monkeypatch):
+    monkeypatch.setenv("DT_URL", "https://dt.example.com")
+    monkeypatch.setenv("DT_TOKEN", "t")
     response = client.get("/")
     assert response.status_code == 200
-    assert b"Get report" in response.data
+    assert b'id="rows"' in response.data
+    assert b"https://dt.example.com" in response.data
+    assert b'name="token"' not in response.data
+
+
+def test_index_explains_missing_dt_config(client, monkeypatch):
+    monkeypatch.delenv("DT_URL", raising=False)
+    monkeypatch.delenv("DT_TOKEN", raising=False)
+    response = client.get("/")
+    assert b"Dependency-Track is not configured" in response.data
 
 
 def test_security_headers_present_on_every_response(client):
@@ -183,46 +194,7 @@ def test_api_projects_400_on_garbage_pagination(client):
     assert "integers" in res.get_json()["error"]
 
 
-def test_form_projects_endpoint_paginates_with_env(monkeypatch):
-    monkeypatch.delenv("DTRG_API_KEY", raising=False)
-    monkeypatch.setenv("DTRG_PROJECTS_PAGE_SIZE", "25")
-    app_module.app.config.update(TESTING=True, WTF_CSRF_ENABLED=False)
-    body = json.dumps([])
-    with patch.object(app_module, "get_projects",
-                      return_value=(body, 0)) as mocked:
-        with app_module.app.test_client() as c:
-            res = c.post("/projects/get_all",
-                         data={"url": "https://example.com", "token": "t",
-                               "searchText": "k", "pageNumber": "2"})
-    app_module.app.config.update(WTF_CSRF_ENABLED=True)
-    assert res.status_code == 200
-    assert res.headers["X-Total-Count"] == "0"
-    assert res.headers["X-Page-Size"] == "25"
-    _, kwargs = mocked.call_args
-    assert kwargs["page_size"] == 25
-    assert kwargs["page_number"] == 2
-    assert kwargs["search_text"] == "k"
-
-
 # CSRF behaviour
-
-def test_form_post_rejected_without_csrf_token(client):
-    """ /reports/get_report and /projects/get_all are form endpoints under CSRF """
-    res = client.post("/reports/get_report",
-                      data={"url": "https://example.com", "token": "t",
-                            "project": "demo (00000000-0000-0000-0000-000000000000)"})
-    assert res.status_code == 400
-    # The CSRF rejection message comes from flask-wtf, distinct from the API
-    # endpoints' JSON error bodies.
-    assert b"CSRF" in res.data or b"csrf" in res.data
-
-
-def test_projects_form_endpoint_rejected_without_csrf_token(client):
-    res = client.post("/projects/get_all",
-                      data={"url": "https://example.com", "token": "t"})
-    assert res.status_code == 400
-    assert b"CSRF" in res.data or b"csrf" in res.data
-
 
 def test_api_endpoints_remain_csrf_exempt(client):
     """ /api/v1/* must not require a CSRF token (CI flow) """

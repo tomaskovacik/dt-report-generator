@@ -1,10 +1,21 @@
 """ Main logic dependency track report generator """
 
+import os
+
+from dotenv import load_dotenv
+
+# DT_URL / DT_TOKEN and the rest of the DTRG_* settings live in .env next to
+# app.py (or the file named by DTRG_ENV_FILE). Loaded before the backend
+# imports because some of them read the environment at import time. Real
+# environment variables win over the file.
+load_dotenv(os.getenv("DTRG_ENV_FILE")
+            or os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+
+# pylint: disable=wrong-import-position
 import hmac
 import json
 import logging
 import re
-import os
 import secrets
 import shutil
 import tempfile
@@ -16,13 +27,10 @@ from flask import (
     Flask,
     Response,
     after_this_request,
-    flash,
     jsonify,
-    redirect,
     render_template,
     request,
     send_file,
-    url_for,
 )
 from flasgger import Swagger
 from flask_bootstrap import Bootstrap5
@@ -42,7 +50,6 @@ from backend.reports import (
     create_diff_report,
     create_report,
 )
-from form import GetReportForm
 
 # Logging setup
 logging.basicConfig(
@@ -192,9 +199,12 @@ def health():
 
 
 # INDEX PAGE
+def _dt_configured():
+    return bool(os.getenv("DT_URL") and os.getenv("DT_TOKEN"))
+
 @app.route("/", methods=["GET"])
 def index():
-    """Render the HTML form for browser users.
+    """Project list with links to each project's report.
     ---
     tags:
       - browser
@@ -202,13 +212,13 @@ def index():
       - text/html
     responses:
       200:
-        description: HTML page with the report-generation form.
+        description: HTML page listing the DT projects.
     """
-    form = GetReportForm()
     return render_template("index.html",
-        form=form,
-        has_env_url=bool(os.getenv("DT_URL")),
-        has_env_token=bool(os.getenv("DT_TOKEN")))
+        dt_configured=_dt_configured(),
+        dt_url=(os.getenv("DT_URL") or "").split("/api/v")[0],
+        max_projects=dashboard_max_projects(),
+        page_size=projects_page_size())
 
 
 # REPORTS GROUP
@@ -228,7 +238,6 @@ def _create_zip(output_dir, with_graph=False):
         return zip_path
     except OSError as e:
         logger.error(f"Error while creating ZIP: {e}")
-        flash("Failed to build report archive.", "danger")
         return None
 
 def _redact(form_data):
@@ -333,60 +342,6 @@ def _build_diff(config_a, config_b, output_dir):
         return None, "Failed to build report archive"
     return zip_path, report
 
-@app.route("/reports/get_report", methods=["POST"])
-def get_report():
-    """Browser form submission. Prefer /api/v1/reports/get_report from CI.
-    ---
-    tags:
-      - browser
-    consumes:
-      - application/x-www-form-urlencoded
-    produces:
-      - application/zip
-      - text/html
-    parameters:
-      - in: formData
-        name: csrf_token
-        required: true
-        type: string
-        description: Token rendered into the form by Flask-WTF. Required.
-      - in: formData
-        name: url
-        type: string
-      - in: formData
-        name: token
-        type: string
-      - in: formData
-        name: project
-        type: string
-        description: '"name version (uuid)" as produced by the form select.'
-    responses:
-      200:
-        description: ZIP archive with the rendered reports.
-      302:
-        description: Redirect back to the form on validation failure.
-      400:
-        description: CSRF token missing or invalid.
-    """
-    logger.info("Received request to generate report")
-    output_dir = _new_output_dir()
-
-    @after_this_request
-    def _cleanup(response):
-        response.call_on_close(lambda: shutil.rmtree(output_dir, ignore_errors=True))
-        return response
-
-    data = request.form.to_dict(flat=False)
-    logger.debug(f"Form data received: {_redact(data)}")
-    zip_path, report = _build_report(data, output_dir)
-    if zip_path:
-        logger.info("Report generation successful. Sending ZIP file")
-        return send_file(zip_path, as_attachment=True,
-                         download_name=_safe_download_name(report))
-    logger.error(f"Report generation failed: {report}")
-    flash(_GENERIC_REPORT_FAILURE, "danger")
-    return redirect(url_for("index"))
-
 @app.route("/api/v1/reports/get_report", methods=["POST"])
 @csrf.exempt
 @_api_limit()
@@ -464,73 +419,6 @@ def get_report_api():
     return send_file(zip_path, as_attachment=True,
                      download_name=_safe_download_name(report),
                      mimetype="application/zip")
-
-@app.route("/reports/diff", methods=["POST"])
-def get_diff_report():
-    """Browser form submission for a project-version diff.
-    ---
-    tags:
-      - browser
-    consumes:
-      - application/x-www-form-urlencoded
-    produces:
-      - application/zip
-      - text/html
-    parameters:
-      - in: formData
-        name: csrf_token
-        required: true
-        type: string
-      - in: formData
-        name: url
-        type: string
-      - in: formData
-        name: token
-        type: string
-      - in: formData
-        name: project
-        type: string
-        description: 'Project A: "name version (uuid)" as produced by the form select.'
-      - in: formData
-        name: project_b
-        type: string
-        description: 'Project B: same shape; the diff is "from A to B".'
-    responses:
-      200:
-        description: ZIP archive with the diff result.xlsx and summary.json.
-      302:
-        description: Redirect back to the form on validation failure.
-      400:
-        description: CSRF token missing or invalid.
-    """
-    logger.info("Received request to generate diff report")
-    output_dir = _new_output_dir()
-
-    @after_this_request
-    def _cleanup(response):
-        response.call_on_close(lambda: shutil.rmtree(output_dir, ignore_errors=True))
-        return response
-
-    data = request.form.to_dict(flat=False)
-    logger.debug(f"Diff form data received: {_redact(data)}")
-    config_a = {
-        "url": data.get("url"),
-        "token": data.get("token"),
-        "project": data.get("project"),
-    }
-    config_b = {
-        "url": data.get("url"),
-        "token": data.get("token"),
-        "project": data.get("project_b"),
-    }
-    zip_path, report = _build_diff(config_a, config_b, output_dir)
-    if zip_path:
-        logger.info("Diff report generation successful. Sending ZIP file")
-        return send_file(zip_path, as_attachment=True,
-                         download_name=_safe_download_name(report))
-    logger.error(f"Diff report generation failed: {report}")
-    flash(_diff_user_error(report) or _GENERIC_REPORT_FAILURE, "danger")
-    return redirect(url_for("index"))
 
 @app.route("/api/v1/reports/diff", methods=["POST"])
 @csrf.exempt
@@ -679,60 +567,6 @@ def _send_dashboard(path, name):
     return send_file(path, as_attachment=True, mimetype="text/html",
                      download_name=secure_filename(f"{name}.html") or "dashboard.html")
 
-@app.route("/reports/dashboard", methods=["POST"])
-def get_dashboard():
-    """Browser form submission for a combined multi-project dashboard.
-    ---
-    tags:
-      - browser
-    consumes:
-      - application/x-www-form-urlencoded
-    produces:
-      - text/html
-    parameters:
-      - in: formData
-        name: csrf_token
-        required: true
-        type: string
-      - in: formData
-        name: url
-        type: string
-      - in: formData
-        name: token
-        type: string
-      - in: formData
-        name: projects
-        type: array
-        items:
-          type: string
-        collectionFormat: multi
-        description: '"name version (uuid)" values as produced by the form select.'
-    responses:
-      200:
-        description: Self-contained dashboard.html.
-      302:
-        description: Redirect back to the form on validation failure.
-      400:
-        description: CSRF token missing or invalid.
-    """
-    logger.info("Received request to generate dashboard")
-    output_dir = _new_output_dir()
-
-    @after_this_request
-    def _cleanup(response):
-        response.call_on_close(lambda: shutil.rmtree(output_dir, ignore_errors=True))
-        return response
-
-    data = request.form.to_dict(flat=False)
-    logger.debug(f"Dashboard form data received: {_redact(data)}")
-    config = {k: data.get(k) for k in ("url", "token") if data.get(k)}
-    path, name = _build_dashboard(config, _project_ids(data.get("projects")), output_dir)
-    if path:
-        return _send_dashboard(path, name)
-    logger.error(f"Dashboard generation failed: {name}")
-    flash(_dashboard_user_error(name) or _GENERIC_REPORT_FAILURE, "danger")
-    return redirect(url_for("index"))
-
 @app.route("/api/v1/reports/dashboard", methods=["POST"])
 @csrf.exempt
 @_api_limit()
@@ -805,72 +639,165 @@ def get_dashboard_api():
     return _send_dashboard(path, name)
 
 
-# PROJECTS GROUP
-@app.route("/projects/get_all", methods=["POST"])
-def get_all_projects():
-    """AJAX project list for the browser form. Prefer /api/v1/projects from CI.
+# BROWSER VIEWS
+# The start page lists DT projects; these GET routes back its buttons. DT
+# URL and token always come from the environment (.env), never the browser.
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+
+def _temp_output_dir():
+    """ Per-request output directory, removed once the response is sent """
+    output_dir = _new_output_dir()
+
+    @after_this_request
+    def _cleanup(response):
+        response.call_on_close(lambda: shutil.rmtree(output_dir, ignore_errors=True))
+        return response
+    return output_dir
+
+def _error_page(message, status):
+    return render_template("error.html", message=message), status
+
+def _list_item(project):
+    metrics = project.get("metrics") or {}
+    return {
+        "uuid": project.get("uuid"),
+        "name": project.get("name"),
+        "version": project.get("version"),
+        "parent": (project.get("parent") or {}).get("name"),
+        "tags": [t.get("name") for t in project.get("tags") or [] if t.get("name")],
+        "classifier": project.get("classifier"),
+        "lastBomImport": project.get("lastBomImport"),
+        "hasChildren": bool(project.get("hasChildren")),
+        "metrics": {k: metrics.get(k) for k in
+                    ("critical", "high", "medium", "low", "unassigned", "inheritedRiskScore")},
+    }
+
+@app.route("/ui/projects", methods=["GET"])
+def ui_projects():
+    """Project page data for the start page (needs DT_URL / DT_TOKEN in the environment).
     ---
     tags:
       - browser
-    consumes:
-      - application/x-www-form-urlencoded
     produces:
       - application/json
     parameters:
-      - in: formData
-        name: csrf_token
-        required: true
+      - in: query
+        name: search
         type: string
-      - in: formData
-        name: url
-        type: string
-      - in: formData
-        name: token
-        type: string
-      - in: formData
-        name: searchText
-        type: string
-        description: Optional substring filter forwarded to DT.
-      - in: formData
-        name: pageNumber
+      - in: query
+        name: page
         type: integer
-        description: 1-based page number. Page size is fixed by DTRG_PROJECTS_PAGE_SIZE.
     responses:
       200:
-        description: |
-          DT project list for the requested page. The X-Total-Count header
-          carries the total number of matching projects.
-      400:
-        description: CSRF or upstream error.
+        description: '{"items": [...], "total": n, "pageSize": n}'
+      502:
+        description: DT is not configured or the request to DT failed.
     """
-    logger.info("Received request to fetch all projects")
-    data = request.form.to_dict(flat=False)
+    if not _dt_configured():
+        return jsonify(error="DT_URL and DT_TOKEN are not set"), 502
     try:
-        url = data.get("url")[0] if not os.getenv("DT_URL") else os.getenv("DT_URL")
-        token = data.get("token")[0] if not os.getenv("DT_TOKEN") else os.getenv("DT_TOKEN")
-        search_text = (data.get("searchText") or [""])[0]
-        try:
-            page_number = max(int((data.get("pageNumber") or ["1"])[0]), 1)
-        except (ValueError, TypeError):
-            page_number = 1
-        logger.debug(f"Fetching projects from: {url} "
-                     f"(page={page_number}, search={search_text!r})")
-        page_size = projects_page_size()
-        body, total = get_projects(url, token,
-                                   search_text=search_text,
-                                   page_size=page_size,
-                                   page_number=page_number)
-        if isinstance(body, dict):
-            return jsonify(body), 502
-        response = Response(body, mimetype="application/json")
-        response.headers["X-Total-Count"] = str(total)
-        response.headers["X-Page-Size"] = str(page_size)
-        return response
-    except (ValueError, ConnectionError, IndexError) as e:
-        logger.error(f"Error fetching projects: {e}")
-        flash("An internal error has occurred while fetching projects.", "danger")
-        return jsonify(error_msg="An internal error has occurred."), 400
+        page = max(int(request.args.get("page", "1")), 1)
+    except ValueError:
+        page = 1
+    page_size = projects_page_size()
+    body, total = get_projects(os.getenv("DT_URL"), os.getenv("DT_TOKEN"),
+                               search_text=request.args.get("search", ""),
+                               page_size=page_size, page_number=page)
+    if isinstance(body, dict):
+        return jsonify(body), 502
+    return jsonify(items=[_list_item(p) for p in json.loads(body)], total=total, pageSize=page_size)
 
+@app.route("/projects/<project>/report", methods=["GET"])
+def view_report(project):
+    """Open one project's dashboard (HTML) in the browser.
+    ---
+    tags:
+      - browser
+    produces:
+      - text/html
+    parameters:
+      - in: path
+        name: project
+        required: true
+        type: string
+    responses:
+      200:
+        description: dashboard.html, inline.
+      502:
+        description: Report generation failed.
+    """
+    if not _UUID_RE.match(project):
+        return _error_page("Unknown project.", 404)
+    output_dir = _temp_output_dir()
+    zip_path, report = _build_report({"project": [project]}, output_dir)
+    path = os.path.join(output_dir, "dashboard.html")
+    if not zip_path or not os.path.exists(path):
+        logger.error(f"Report view failed: {report}")
+        return _error_page(_GENERIC_REPORT_FAILURE, 502)
+    return send_file(path, mimetype="text/html")
+
+@app.route("/projects/<project>/report.zip", methods=["GET"])
+def download_report(project):
+    """Download one project's report ZIP (docx, xlsx, summary.json, graph, dashboard).
+    ---
+    tags:
+      - browser
+    produces:
+      - application/zip
+    parameters:
+      - in: path
+        name: project
+        required: true
+        type: string
+    responses:
+      200:
+        description: ZIP archive.
+      502:
+        description: Report generation failed.
+    """
+    if not _UUID_RE.match(project):
+        return _error_page("Unknown project.", 404)
+    output_dir = _temp_output_dir()
+    zip_path, report = _build_report({"project": [project]}, output_dir)
+    if not zip_path:
+        logger.error(f"Report download failed: {report}")
+        return _error_page(_GENERIC_REPORT_FAILURE, 502)
+    return send_file(zip_path, as_attachment=True, mimetype="application/zip",
+                     download_name=_safe_download_name(report))
+
+@app.route("/dashboard", methods=["GET"])
+def view_dashboard():
+    """Open one combined dashboard for several projects (?projects=<uuid>&projects=<uuid>).
+    ---
+    tags:
+      - browser
+    produces:
+      - text/html
+    parameters:
+      - in: query
+        name: projects
+        type: array
+        items:
+          type: string
+        collectionFormat: multi
+    responses:
+      200:
+        description: Combined dashboard.html, inline.
+      400:
+        description: No / too many / malformed project ids.
+    """
+    projects = _project_ids(request.args.getlist("projects"))
+    if not all(_UUID_RE.match(p) for p in projects):
+        return _error_page("Unknown project.", 400)
+    path, name = _build_dashboard({}, projects, _temp_output_dir())
+    if not path:
+        logger.error(f"Combined dashboard failed: {name}")
+        user_error = _dashboard_user_error(name)
+        return _error_page(user_error or _GENERIC_REPORT_FAILURE, 400 if user_error else 502)
+    return send_file(path, mimetype="text/html")
+
+
+# PROJECTS GROUP
 @app.route("/api/v1/projects", methods=["POST"])
 @csrf.exempt
 @_api_limit()

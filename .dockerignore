@@ -13,3 +13,4 @@ LICENSE.md
 SECURITY.md
 README.md
 .venv
+.env

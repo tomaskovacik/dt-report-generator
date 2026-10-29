@@ -275,12 +275,89 @@ def test_api_dashboard_requires_key_when_set(client, monkeypatch):
     res = client.post("/api/v1/reports/dashboard", json={"projects": ["a"]})
     assert res.status_code == 401
 
-def test_form_dashboard_parses_select_labels(client):
-    with patch.object(app_module, "_build_dashboard", return_value=(None, ValueError("x"))) as build:
-        client.post("/reports/dashboard", data={
-            "projects": ["app 1.0 (uuid-1)", "other (uuid-2)"], "url": "u", "token": "t"})
-    assert build.call_args.args[1] == ["uuid-1", "uuid-2"]
+# browser views
 
-def test_index_renders_dashboard_toggle(client):
-    res = client.get("/")
-    assert b'id="dashboard"' in res.data and b'id="projects"' in res.data
+UUID_A = "00000000-0000-0000-0000-00000000000a"
+UUID_B = "00000000-0000-0000-0000-00000000000b"
+
+
+@pytest.fixture
+def dt_env(monkeypatch):
+    monkeypatch.setenv("DT_URL", "https://dt.example.com")
+    monkeypatch.setenv("DT_TOKEN", "t")
+
+
+def test_ui_projects_trims_dt_fields(client, dt_env):
+    dt = [{"uuid": UUID_A, "name": "api", "version": "1.0", "parent": {"name": "WT", "uuid": "x"},
+           "tags": [{"name": "java"}], "lastBomImport": 1, "directDependencies": "[huge]",
+           "metrics": {"critical": 3, "high": 4, "medium": 0, "low": 1, "components": 99}}]
+    with patch.object(app_module, "get_projects", return_value=(json.dumps(dt), 1)) as get:
+        res = client.get("/ui/projects?search=api&page=2")
+    body = res.get_json()
+    assert body["total"] == 1
+    item = body["items"][0]
+    assert item["parent"] == "WT" and item["tags"] == ["java"]
+    assert item["metrics"]["critical"] == 3 and "components" not in item["metrics"]
+    assert "directDependencies" not in item
+    args, kwargs = get.call_args
+    assert args == ("https://dt.example.com", "t")
+    assert kwargs["search_text"] == "api" and kwargs["page_number"] == 2
+
+def test_ui_projects_needs_dt_config(client, monkeypatch):
+    monkeypatch.delenv("DT_URL", raising=False)
+    assert client.get("/ui/projects").status_code == 502
+
+def test_ui_projects_upstream_error(client, dt_env):
+    with patch.object(app_module, "get_projects", return_value=({"error": "x"}, 0)):
+        assert client.get("/ui/projects").status_code == 502
+
+def _fake_build_report(config, output_dir):
+    with open(os.path.join(output_dir, "dashboard.html"), "w") as f:
+        f.write("<html>dash</html>")
+    zip_path = os.path.join(output_dir, "reports.zip")
+    with open(zip_path, "wb") as f:
+        f.write(b"PK")
+    return zip_path, "api 1.0 (29.10.2026)"
+
+def test_view_report_inline(client, dt_env):
+    with patch.object(app_module, "_build_report", side_effect=_fake_build_report) as build:
+        res = client.get(f"/projects/{UUID_A}/report")
+    assert res.status_code == 200 and res.mimetype == "text/html"
+    assert "attachment" not in res.headers.get("Content-Disposition", "")
+    assert res.data == b"<html>dash</html>"
+    assert build.call_args.args[0] == {"project": [UUID_A]}
+
+def test_download_report_zip(client, dt_env):
+    with patch.object(app_module, "_build_report", side_effect=_fake_build_report):
+        res = client.get(f"/projects/{UUID_A}/report.zip")
+    assert res.status_code == 200 and res.mimetype == "application/zip"
+    assert "attachment" in res.headers["Content-Disposition"]
+    assert "api_1.0_29.10.2026.zip" in res.headers["Content-Disposition"]
+
+def test_report_failure_shows_error_page(client, dt_env):
+    with patch.object(app_module, "_build_report", return_value=(None, ValueError("secret"))):
+        res = client.get(f"/projects/{UUID_A}/report")
+    assert res.status_code == 502
+    assert b"Report generation failed" in res.data and b"secret" not in res.data
+
+def test_report_rejects_non_uuid(client):
+    with patch.object(app_module, "_build_report") as build:
+        assert client.get("/projects/..%2Fetc/report").status_code == 404
+        assert client.get("/projects/abc/report.zip").status_code == 404
+    build.assert_not_called()
+
+def test_view_combined_dashboard(client, dt_env):
+    def fake(config, projects, output_dir):
+        path = os.path.join(output_dir, "dashboard.html")
+        with open(path, "w") as f:
+            f.write("combined")
+        return path, "dashboard"
+    with patch.object(app_module, "_build_dashboard", side_effect=fake) as build:
+        res = client.get(f"/dashboard?projects={UUID_A}&projects={UUID_B}")
+    assert res.status_code == 200 and res.data == b"combined"
+    assert build.call_args.args[1] == [UUID_A, UUID_B]
+
+def test_combined_dashboard_user_errors(client, dt_env):
+    res = client.get("/dashboard")
+    assert res.status_code == 400 and b"Select at least one project" in res.data
+    assert client.get("/dashboard?projects=nope").status_code == 400

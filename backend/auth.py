@@ -31,7 +31,7 @@ bp = Blueprint("auth", __name__, url_prefix="/auth")
 # Endpoints that never need a browser session
 _PUBLIC_PREFIXES = ("/health", "/auth/", "/api/v1/", "/static/")
 # Endpoints called from page scripts: answer 401 instead of a login redirect
-_AJAX_PATHS = ("/projects/get_all",)
+_AJAX_PATHS = ("/ui/projects",)
 
 
 def enabled() -> bool:

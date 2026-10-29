@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}dtrg: error{% endblock %}
+{% block content %}
+<div class="container py-5" style="max-width: 640px">
+    <div class="alert alert-danger" role="alert">{{ message }}</div>
+    <a href="{{ url_for('index') }}">Back to the project list</a>
+</div>
+{% endblock %}
