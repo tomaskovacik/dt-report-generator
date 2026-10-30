@@ -17,9 +17,11 @@ python ./app.py
 ```
 №2. Docker
 ```
-docker pull ghcr.io/denimoll/dt-report-generator:latest
-docker run --name dtrg -d -p 5000:5000 --env-file .env ghcr.io/denimoll/dt-report-generator
+docker pull ghcr.io/tomaskovacik/dt-report-generator:management-dashboard
+docker run --name dtrg -d --restart unless-stopped -p 5000:5000 --env-file .env \
+    ghcr.io/tomaskovacik/dt-report-generator:management-dashboard
 ```
+Image tags (built by `.github/workflows/publish.yml` after pytest and a Trivy scan): `:<branch>` and `:sha-<commit>` on every push to `main` / `management-dashboard`; `:<version>` and `:latest` for a version tag (`git tag v.2.3.0 && git push --tags`), which also creates a GitHub release. In `.env` for the container use `DTRG_HOST=0.0.0.0`.
 ### Usage
 1. Open [localhost:5000](http://localhost:5000). The start page lists the Dependency-Track projects with their critical / high / medium / low counts, newest BOM first. Search by name, or paste a project UUID.
 2. **Show report** opens the project's management dashboard in a new tab.
