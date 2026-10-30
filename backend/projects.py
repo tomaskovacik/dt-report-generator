@@ -16,6 +16,19 @@ _UUID_PATTERN = re.compile(
 )
 
 
+MAX_DT_PAGE_SIZE = 100
+
+
+class _Joined:
+    """ Response stand-in for pages joined into one list """
+
+    def __init__(self, text):
+        self.text = text
+
+    def json(self):
+        return json.loads(self.text)
+
+
 def get_projects(url, token, search_text="", page_size=99999, page_number=1):
     """ Fetch a page of DT projects.
 
@@ -63,24 +76,43 @@ def get_projects(url, token, search_text="", page_size=99999, page_number=1):
         primary = tokens[0] if tokens else ""
         extra_filters = [t.lower() for t in tokens[1:]]
 
-        endpoint = (
-            f"{url}project?excludeInactive=true&onlyRoot=false"
-            f"&searchText={quote(primary)}"
-            f"&sortName=lastBomImport&sortOrder=desc"
-            f"&pageSize={page_size}&pageNumber={page_number}"
-        )
-        logger.debug(f"Sending request to: {endpoint}")
+        def fetch(size, number):
+            endpoint = (
+                f"{url}project?excludeInactive=true&onlyRoot=false"
+                f"&searchText={quote(primary)}"
+                f"&sortName=lastBomImport&sortOrder=desc"
+                f"&pageSize={size}&pageNumber={number}"
+            )
+            logger.debug(f"Sending request to: {endpoint}")
+            res = requests.get(endpoint,
+                headers=headers, verify=verify_tls(), timeout=http_timeout())
+            if res.status_code != 200:
+                logger.warning(f"DT returned status {res.status_code} for project list")
+                return None, 0
+            try:
+                return res, int(res.headers.get("X-Total-Count") or "0")
+            except ValueError:
+                return res, 0
 
-        # get projects
-        res = requests.get(endpoint,
-            headers=headers, verify=verify_tls(), timeout=http_timeout())
-        if res.status_code != 200:
-            logger.warning(f"DT returned status {res.status_code} for project list")
-            return {"error": "Request to Dependency-Track failed"}, 0
-        try:
-            total = int(res.headers.get("X-Total-Count") or "0")
-        except ValueError:
-            total = 0
+        if page_size > MAX_DT_PAGE_SIZE:
+            # "everything" is fetched in bounded pages: DT builds each
+            # response in memory, and every project carries its
+            # directDependencies JSON (about 1 MB for container images)
+            items, number, total = [], 1, 0
+            while True:
+                res, total = fetch(MAX_DT_PAGE_SIZE, number)
+                if res is None:
+                    return {"error": "Request to Dependency-Track failed"}, 0
+                batch = res.json() or []
+                items += batch
+                if len(batch) < MAX_DT_PAGE_SIZE or len(items) >= min(total or len(items), page_size):
+                    break
+                number += 1
+            res = _Joined(json.dumps(items[:page_size]))
+        else:
+            res, total = fetch(page_size, page_number)
+            if res is None:
+                return {"error": "Request to Dependency-Track failed"}, 0
 
         if extra_filters:
             try:

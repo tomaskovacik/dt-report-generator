@@ -167,7 +167,15 @@ def _fetch_project_info(url, headers, project):
 
 
 def _fetch_sbom(url, headers, project):
-    """ Pull the CycloneDX SBOM (vulnerabilities + dependency graph) """
+    """ Pull the CycloneDX SBOM: vulnerabilities, dependency graph, components.
+
+    The components come from here rather than from /component/project: DT
+    embeds the whole parent project (including its directDependencies JSON,
+    about 1 MB for a container-image project) in every component that
+    endpoint returns, so a 4,500-component image produced a ~850 MB response
+    and pushed both DT and dtrg into gigabytes of memory. In DT's export the
+    bom-ref of a component is its DT component UUID.
+    """
     logger.info("Fetching SBOM with vulnerabilities")
     res = requests.get(url+"bom/cyclonedx/project/"+project
                        +"?format=json&variant=withVulnerabilities&download=true",
@@ -178,56 +186,71 @@ def _fetch_sbom(url, headers, project):
     deps_deps = {}
     for deps in text.get("dependencies") or []:
         deps_deps[deps.get("ref")] = deps.get("dependsOn")
-    return vulnerabilities, deps_deps
+    components = [
+        {"uuid": c.get("bom-ref"), "name": c.get("name"), "version": c.get("version"),
+         "group": c.get("group") or ""}
+        for c in text.get("components") or [] if c.get("bom-ref")
+    ]
+    return vulnerabilities, deps_deps, components
+
+
+FINDINGS_PAGE_SIZE = 500
 
 
 def _fetch_findings(url, headers, project):
-    """ Pull VEX analysis from the findings API.
+    """ Pull VEX analysis and latest known versions from the findings API.
 
     The CycloneDX variant=withVulnerabilities does not always carry the
     analysis block (depends on DT version and how the VEX was imported);
     findings is the source of truth for the audit state shown in the DT UI.
-    Returns a (vuln_id, component_uuid) -> analysis dict map.
+    Findings also carry each vulnerable component's latestVersion, the only
+    components whose latest version the report shows.
+    Returns ({(vuln_id, component_uuid): analysis}, {component_uuid: latest}).
     """
     logger.info("Fetching VEX analysis from findings API")
-    res = requests.get(url+"finding/project/"+project+"?suppressed=true",
-                       headers=headers, verify=verify_tls(), timeout=http_timeout())
-    res.raise_for_status()
-    analysis_by_pair = {}
-    for finding in res.json() or []:
-        vuln_id = (finding.get("vulnerability") or {}).get("vulnId")
-        component_uuid = (finding.get("component") or {}).get("uuid")
-        analysis = finding.get("analysis") or {}
-        if vuln_id and component_uuid:
-            analysis_by_pair[(vuln_id, component_uuid)] = {
-                "state": (analysis.get("state") or "").lower(),
-                "justification": analysis.get("justification") or "",
-                "is_suppressed": bool(analysis.get("isSuppressed")),
-            }
+    analysis_by_pair, latest_by_uuid = {}, {}
+    page = 1
+    while True:
+        # paged: without pageSize DT returns only the first 100 findings
+        res = requests.get(url+"finding/project/"+project, headers=headers,
+                           params={"suppressed": "true", "pageSize": FINDINGS_PAGE_SIZE,
+                                   "pageNumber": page},
+                           verify=verify_tls(), timeout=http_timeout())
+        res.raise_for_status()
+        batch = res.json() or []
+        for finding in batch:
+            component = finding.get("component") or {}
+            vuln_id = (finding.get("vulnerability") or {}).get("vulnId")
+            component_uuid = component.get("uuid")
+            analysis = finding.get("analysis") or {}
+            if component_uuid and component.get("latestVersion"):
+                latest_by_uuid[component_uuid] = component["latestVersion"]
+            if vuln_id and component_uuid:
+                analysis_by_pair[(vuln_id, component_uuid)] = {
+                    "state": (analysis.get("state") or "").lower(),
+                    "justification": analysis.get("justification") or "",
+                    "is_suppressed": bool(analysis.get("isSuppressed")),
+                }
+        if len(batch) < FINDINGS_PAGE_SIZE:
+            break
+        page += 1
     logger.info(f"Findings API returned analysis for "
                 f"{len(analysis_by_pair)} (vuln, component) pairs")
-    return analysis_by_pair
+    return analysis_by_pair, latest_by_uuid
 
 
-def _fetch_components(url, headers, project, direct_uuids, deps_deps):
-    """ Pull every component of the project and shape it for the report """
-    res = requests.get(url+"component/project/"+project+
-        "?searchText=&pageSize=99999&pageNumber=1",
-        headers=headers, verify=verify_tls(), timeout=http_timeout())
-    res.raise_for_status()
+def _fetch_components(bom_components, direct_uuids, deps_deps, latest_by_uuid):
+    """ Shape the SBOM's components for the report (no extra DT request) """
     components = {}
-    for component in res.json():
-        try:
-            last_version = component.get("repositoryMeta").get("latestVersion")
-        except AttributeError:
-            last_version = ""
-        components[component.get("uuid")] = {
+    for component in bom_components:
+        uuid = component["uuid"]
+        components[uuid] = {
             "name": component.get("name"),
             "version": component.get("version"),
             "group": component.get("group") or "",
-            "last_version": last_version,
-            "is_direct_dependency": component.get("uuid") in direct_uuids,
-            "dependencies": deps_deps[component.get("uuid")],
+            "last_version": latest_by_uuid.get(uuid, ""),
+            "is_direct_dependency": uuid in direct_uuids,
+            "dependencies": deps_deps.get(uuid),
             "vulnerabilities": [],
             "severity": "",
             "severity_level": 0,
@@ -660,10 +683,9 @@ def _load_dt_data(url, headers, project):
     """
     project_info, project_name_str, direct_uuids = _fetch_project_info(
         url, headers, project)
-    vulnerabilities, deps_deps = _fetch_sbom(url, headers, project)
-    analysis_by_pair = _fetch_findings(url, headers, project)
-    components = _fetch_components(url, headers, project,
-                                   direct_uuids, deps_deps)
+    vulnerabilities, deps_deps, bom_components = _fetch_sbom(url, headers, project)
+    analysis_by_pair, latest_by_uuid = _fetch_findings(url, headers, project)
+    components = _fetch_components(bom_components, direct_uuids, deps_deps, latest_by_uuid)
     return {
         "project_info": project_info,
         "name": project_name_str,

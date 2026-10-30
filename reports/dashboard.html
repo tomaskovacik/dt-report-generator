@@ -10,7 +10,7 @@
   --page: #f9f9f7; --surface: #fcfcfb; --surface-2: #f3f2ee;
   --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
   --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
-  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #4a3aa7; --s8: #e34948;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #4a3aa7; --s8: #e34948; --other: #b5b4ae;
   --critical: #d03b3b; --serious: #ec835a; --warning: #fab219; --good: #0ca30c; --info: #898781;
   --link: #1c5cab; --good-text: #006300;
 }
@@ -20,7 +20,7 @@
     --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321;
     --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
     --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
-    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767; --other: #5c5b57;
     --link: #86b6ef; --good-text: #0ca30c;
   }
 }
@@ -29,7 +29,7 @@
   --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321;
   --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
   --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
-  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767; --other: #5c5b57;
   --link: #86b6ef; --good-text: #0ca30c;
 }
 * { box-sizing: border-box; }
@@ -150,8 +150,9 @@ ul.legendlist { margin: 6px 0 0; padding-left: 18px; font-size: 12px; color: var
 <div class="wrap">
   <header>
     <div>
-      <h1>Vulnerability Dashboard</h1>
+      <h1 id="title">Vulnerability Dashboard</h1>
       <div class="sub" id="meta"></div>
+      <div class="sub" id="coverage"></div>
     </div>
     <div class="sub">Source: Dependency-Track · GitHub Advisory DB · VEX-suppressed findings excluded</div>
   </header>
@@ -225,13 +226,27 @@ const SEVS = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO", "UNASSIGNED"];
 const SEV_LABEL = {CRITICAL: "Critical", HIGH: "High", MEDIUM: "Medium", LOW: "Low", INFO: "Info", UNASSIGNED: "Unassigned"};
 const SEV_COLOR = {critical: "var(--critical)", high: "var(--serious)", medium: "var(--warning)", low: "var(--info)"};
 const P = DATA.projects;
-P.forEach((p, i) => p.color = `var(--s${(i % 8) + 1})`);
+// at most 8 distinct series colours: with more apps the 7 with the most
+// critical/high findings keep a colour and the rest share a neutral "Other"
+const chTotal = p => (p.counts.CRITICAL || 0) + (p.counts.HIGH || 0);
+const COLORED = P.length <= 8 ? P : [...P].sort((a, b) => chTotal(b) - chTotal(a)).slice(0, 7);
+P.forEach(p => p.color = COLORED.includes(p) ? `var(--s${COLORED.indexOf(p) + 1})` : "var(--other)");
+const OTHERS = P.filter(p => !COLORED.includes(p));
+const SERIES = OTHERS.length ? [...COLORED, {name: `Other (${OTHERS.length} apps)`, color: "var(--other)",
+  counts: OTHERS.reduce((acc, p) => { Object.entries(p.counts).forEach(([k, v]) => acc[k] = (acc[k] || 0) + v); return acc; }, {})}] : COLORED;
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 const $ = id => document.getElementById(id);
 
 const state = {open: new Set(), apps: new Set(P.map(p => p.name)), sevs: new Set(["critical", "high", "other"]), kev: false, noFix: false, p1: false, q: "", tab: "upgrades", sort: {upgrades: ["prio", -1], vulns: ["prio", -1]}};
 
 $("meta").textContent = `Generated ${DATA.generated} · ${P.length} application${P.length > 1 ? "s" : ""}`;
+(DATA.collections || []).forEach((c, i, all) => {
+  if (all.length === 1) { $("title").textContent = `Vulnerability Dashboard: ${c.name}`; document.title = `${c.name}: vulnerability dashboard`; }
+  const logic = {AGGREGATE_DIRECT_CHILDREN: "all direct children", AGGREGATE_LATEST_VERSION_CHILDREN: "children marked as latest version",
+                 AGGREGATE_DIRECT_CHILDREN_WITH_TAG: `children tagged “${c.tag || ""}”`}[c.logic] || c.logic;
+  $("coverage").insertAdjacentHTML("beforeend", `<div>DT collection <b>${esc(c.name)}</b> (${esc(logic)}): ${c.included.length} project${c.included.length === 1 ? "" : "s"} included` +
+    (c.skipped.length ? ` · skipped, no BOM yet: ${c.skipped.map(esc).join(", ")}` : "") + `</div>`);
+});
 
 /* ---------- priority ---------- */
 function prio(v) {
@@ -410,7 +425,7 @@ function drawChart() {
     const y = top + i * (barH + gap);
     s += `<text x="${labelW - 12}" y="${y + barH / 2 + 4}" text-anchor="end" fill="var(--ink-2)" font-weight="600">${SEV_LABEL[sev]}</text>`;
     let acc = 0;
-    const segs = P.map((p, j) => ({p, j, v: p.counts[sev] || 0})).filter(d => d.v);
+    const segs = SERIES.map((p, j) => ({p, j, v: p.counts[sev] || 0})).filter(d => d.v);
     segs.forEach((d, k) => {
       const x0 = x(acc), x1 = x(acc + d.v);
       const last = k === segs.length - 1;
@@ -426,14 +441,14 @@ function drawChart() {
   });
   s += `<line x1="${labelW}" x2="${labelW}" y1="${top - 4}" y2="${H - axisH}" stroke="var(--axis)"/></svg>`;
   $("chartSvg").innerHTML = s;
-  $("legend").innerHTML = P.map(p => `<span><span class="sw" style="background:${p.color}"></span>${esc(p.name)}</span>`).join("");
+  $("legend").innerHTML = SERIES.map(p => `<span><span class="sw" style="background:${p.color}"></span>${esc(p.name)}</span>`).join("");
 
   const tip = $("tip");
   $("chartSvg").querySelectorAll(".hit").forEach(h => {
     h.addEventListener("mousemove", e => {
       const sev = h.dataset.sev;
       const tot = P.reduce((a, p) => a + (p.counts[sev] || 0), 0);
-      tip.innerHTML = `<b>${SEV_LABEL[sev]} · ${tot}</b>` + P.map(p => `<div class="row"><span><span class="sw" style="background:${p.color}"></span>${esc(p.name)}</span><span>${p.counts[sev] || 0}</span></div>`).join("");
+      tip.innerHTML = `<b>${SEV_LABEL[sev]} · ${tot}</b>` + SERIES.map(p => `<div class="row"><span><span class="sw" style="background:${p.color}"></span>${esc(p.name)}</span><span>${p.counts[sev] || 0}</span></div>`).join("");
       tip.style.display = "block";
       const tw = tip.offsetWidth;
       tip.style.left = Math.min(e.clientX + 14, innerWidth - tw - 8) + "px";

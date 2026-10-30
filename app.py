@@ -39,7 +39,7 @@ from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.utils import secure_filename
 
-from backend import auth, dashboard, mail_summary, mailer, scheduler, store
+from backend import auth, dashboard, dt_collections, mail_summary, mailer, scheduler, store
 from backend.dependency_graph import get_graph
 from backend.param_validators import projects_page_size
 from backend.projects import get_projects
@@ -60,7 +60,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-__version__ = "2.3.0"
+__version__ = "3.0.0"
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("DTRG_SECRET_KEY") or secrets.token_hex(16)
@@ -336,8 +336,44 @@ def _add_dashboard(config, output_dir, graph=None):
     except Exception as e:  # pylint: disable=broad-except
         logger.warning(f"Dashboard generation skipped: {e}")
 
+def _collection_of(config):
+    """ The collection info when config's project is a DT collection, else None """
+    try:
+        url, headers, project = _resolve_params(config)
+        _, infos = dt_collections.expand(url, headers, [project])
+    except Exception:  # pylint: disable=broad-except
+        return None  # the regular pipeline reports the problem
+    return infos[0] if infos else None
+
+def _build_collection_zip(config, output_dir, info):
+    """ ZIP for a collection: combined dashboard.html + one report folder per child """
+    data, err = _build_dashboard_data(config, [info["uuid"]], output_dir)
+    if err is not None:
+        return None, err
+    dashboard.render(data["projects"], os.path.join(output_dir, "dashboard.html"), data["collections"])
+    zip_path = os.path.join(output_dir, "reports.zip")
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+        zipf.write(os.path.join(output_dir, "dashboard.html"), arcname="dashboard.html")
+        for i, project in enumerate(data["projects"]):
+            sub = os.path.join(output_dir, f"child{i}")
+            os.makedirs(sub)
+            report, components = create_report({**config, "project": [project["uuid"]]}, sub)
+            if not isinstance(report, str):
+                logger.warning(f"Collection child {project['name']} skipped: {report}")
+                continue
+            if components:
+                _create_graph(components, sub)
+            folder = secure_filename(project["name"]) or f"project{i}"
+            for file in ("result.docx", "result.xlsx", "summary.json", "graph.html"):
+                if os.path.exists(os.path.join(sub, file)):
+                    zipf.write(os.path.join(sub, file), arcname=f"{folder}/{file}")
+    return zip_path, f"{info['name']} collection ({datetime.now().strftime('%d.%m.%Y')})"
+
 def _build_report(config, output_dir):
     """ Run create_report + graph + dashboard + zip and return (zip_path, name_or_error) """
+    collection = _collection_of(config)
+    if collection:
+        return _build_collection_zip(config, output_dir, collection)
     report, components = create_report(config, output_dir)
     if not isinstance(report, str):
         return None, report
@@ -546,11 +582,12 @@ def _project_ids(values):
 
 def _build_dashboard(config, projects, output_dir):
     """ One combined page for several projects -> (html_path, name_or_error) """
-    collected, err = _build_dashboard_data(config, projects, output_dir)
+    data, err = _build_dashboard_data(config, projects, output_dir)
     if err is not None:
         return None, err
-    path = dashboard.render(collected, os.path.join(output_dir, "dashboard.html"))
-    return path, f"dashboard {datetime.now().strftime('%d.%m.%Y')}"
+    path = dashboard.render(data["projects"], os.path.join(output_dir, "dashboard.html"), data["collections"])
+    name = data["collections"][0]["name"] if len(data["collections"]) == 1 and len(projects) == 1 else "dashboard"
+    return path, f"{name} {datetime.now().strftime('%d.%m.%Y')}"
 
 def _dashboard_project(url, headers, project):
     """ Dashboard data straight from DT, without rendering docx / xlsx / ZIP """
@@ -563,25 +600,35 @@ def _dashboard_project(url, headers, project):
     return dashboard.build_project(url, headers, project, label, tree, graph=components)
 
 def _build_dashboard_data(config, projects, output_dir):
-    """ Dashboard data for several projects -> (collected, None) or (None, error) """
+    """ -> ({"projects": [...], "collections": [...]}, None) or (None, error).
+
+    Selected collection projects are expanded into their children (per the
+    collection logic set in DT), so a schedule follows changes made in DT.
+    """
     if not projects:
         return None, ValueError("Select at least one project")
     if len(projects) > dashboard_max_projects():
         return None, ValueError(f"At most {dashboard_max_projects()} projects per dashboard")
     try:
         url, headers, _ = _resolve_params({**config, "project": [projects[0]]})
-        collected = [_dashboard_project(url, headers, project) for project in projects]
+        leaves, collections = dt_collections.expand(url, headers, projects)
+        if not leaves:
+            return None, ValueError(f"No projects with a BOM in {', '.join(c['name'] for c in collections)}")
+        limit = dt_collections.max_projects() if collections else dashboard_max_projects()
+        if len(leaves) > limit:
+            return None, ValueError(f"At most {limit} projects per dashboard ({len(leaves)} selected)")
+        collected = [_dashboard_project(url, headers, project) for project in leaves]
     except (ValueError, ConnectionError) as e:
         return None, e
     except Exception as e:  # pylint: disable=broad-except
         logger.exception("Dashboard generation failed")
         return None, e
-    return collected, None
+    return {"projects": collected, "collections": collections}, None
 
 def _dashboard_user_error(err):
     """ Input errors that are safe and useful to show to the user """
     msg = str(err) if isinstance(err, ValueError) else ""
-    if msg == "Select at least one project" or msg.startswith("At most "):
+    if msg == "Select at least one project" or msg.startswith(("At most ", "No projects with a BOM")):
         return msg
     return None
 
@@ -690,6 +737,10 @@ def _list_item(project):
         "classifier": project.get("classifier"),
         "lastBomImport": project.get("lastBomImport"),
         "hasChildren": bool(project.get("hasChildren")),
+        "collection": dt_collections.LOGIC_LABELS.get(project.get("collectionLogic") or "", None)
+        and (dt_collections.LOGIC_LABELS[project["collectionLogic"]]
+             + (f" {(project.get('collectionTag') or {}).get('name')}"
+                if project["collectionLogic"] == "AGGREGATE_DIRECT_CHILDREN_WITH_TAG" else "")),
         "metrics": {k: metrics.get(k) for k in
                     ("critical", "high", "medium", "low", "unassigned", "inheritedRiskScore")},
     }
@@ -826,20 +877,22 @@ def send_report_email(projects, recipients, note=None):
     recipients = mailer.check_recipients(recipients)
     output_dir = _new_output_dir()
     try:
-        collected, err = _build_dashboard_data({}, projects, output_dir)
+        data, err = _build_dashboard_data({}, projects, output_dir)
         if err is not None:
             logger.error(f"Report for email failed: {err}")
             raise mailer.MailError(_dashboard_user_error(err) or _GENERIC_REPORT_FAILURE)
-        path = dashboard.render(collected, os.path.join(output_dir, "dashboard.html"))
+        collected, collections = data["projects"], data["collections"]
+        path = dashboard.render(collected, os.path.join(output_dir, "dashboard.html"), collections)
         stamp = datetime.now().strftime("%Y-%m-%d")
-        label = collected[0]["name"] if len(collected) == 1 else "combined"
-        attachment = secure_filename(f"dashboard_{label}_{stamp}.html") or "dashboard.html"
+        title = mail_summary.title(collected, collections, len(projects))
+        attachment = secure_filename(f"dashboard_{title}_{stamp}.html") or "dashboard.html"
         summary = mail_summary.summarize(collected)
         html = render_template("email_summary.html", s=summary, attachment=attachment, note=note,
+                               collections=collections, title=title,
                                generated=datetime.now().strftime("%Y-%m-%d %H:%M"),
                                public_url=os.getenv("DTRG_PUBLIC_URL"))
         with open(path, "rb") as f:
-            mailer.send(recipients, mail_summary.subject(collected, summary), html,
+            mailer.send(recipients, mail_summary.subject(title, summary), html,
                         [(attachment, f.read(), "text/html")])
     finally:
         shutil.rmtree(output_dir, ignore_errors=True)

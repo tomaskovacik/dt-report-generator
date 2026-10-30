@@ -31,6 +31,7 @@
         .sev.zero .dot { opacity: .3; }
         .pname { font-weight: 600; }
         .parent { display: block; font-size: 12px; color: #8a8983; }
+        .coll { font-size: 11px; font-weight: 600; color: #1c5cab; background: #eef4fc; border-radius: 4px; padding: 1px 6px; white-space: nowrap; }
         .tag { font-size: 11px; background: #f0efea; color: #55544f; border-radius: 4px; padding: 0 5px; margin-right: 3px; white-space: nowrap; }
         .when { color: #6c6b66; font-size: 13px; white-space: nowrap; }
         .actions { white-space: nowrap; text-align: right; }
@@ -150,7 +151,7 @@
     <p class="meta mt-3" style="font-size: 12px; color: #8a8983">
         <b>Show report</b> opens the project's management dashboard in a new tab.
         <b>ZIP</b> downloads the full report (Word, Excel, summary.json, dependency graph, dashboard).
-        Tick up to {{ max_projects }} projects for one combined dashboard. A report takes 10–30 seconds to build.
+        Tick up to {{ max_projects }} projects for one combined dashboard. A <b>collection</b> project reports on its child projects, following the collection setting in Dependency-Track (all children, latest versions, or tagged). A report takes 10–30 seconds to build (longer for large collections).
     </p>
     {% endif %}
 </div>
@@ -210,7 +211,7 @@
 
     function showError(msg) { const e = $("err"); e.textContent = msg; e.hidden = !msg; }
 
-    const label = p => p.name + (p.version ? " " + p.version : "");
+    const label = p => p.name + (p.version ? " " + p.version : "") + (p.collection ? " (collection)" : "");
 
     function renderSelection() {
         const n = state.selected.size;
@@ -231,7 +232,7 @@
         if (!items.length) { $("rows").innerHTML = `<tr><td colspan="9" class="empty">No projects match.</td></tr>`; return; }
         $("rows").innerHTML = items.map(p => `<tr>
             <td><input type="checkbox" class="form-check-input" data-uuid="${esc(p.uuid)}" data-label="${esc(label(p))}" aria-label="Select ${esc(p.name)}"></td>
-            <td>${p.parent ? `<span class="parent">${esc(p.parent)} /</span>` : ""}<span class="pname">${esc(p.name)}</span>
+            <td>${p.parent ? `<span class="parent">${esc(p.parent)} /</span>` : ""}<span class="pname">${esc(p.name)}</span>${p.collection ? ` <span class="coll" title="DT collection: the report covers its child projects">collection · ${esc(p.collection)}</span>` : ""}
                 ${p.tags.length ? `<div>${p.tags.slice(0, 4).map(t => `<span class="tag">${esc(t)}</span>`).join("")}</div>` : ""}</td>
             <td class="text-muted">${esc(p.version || "–")}</td>
             ${SEV.map(([k, c]) => { const v = p.metrics[k] || 0;

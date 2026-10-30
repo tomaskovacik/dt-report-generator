@@ -51,6 +51,14 @@ Every report ZIP now also has a `dashboard.html`. It is a self-contained page (n
 
 Fix versions come from the GitHub Advisory DB (`first_patched_version`) and DT's affected-version ranges (incl. NVD CPE ranges). Each candidate is checked on Maven Central / npm. When the only fix for your release line is a commercial build (typical for Spring / Tomcat EOL lines), the page says so and suggests the newest public release instead. These lookups are best effort: if they fail, the fix column stays empty and the report is still produced. Set `DTRG_DASHBOARD_ENRICH=false` on air-gapped installs. The DT API key needs `VIEW_PORTFOLIO` and `VIEW_VULNERABILITY`.
 
+### Collection projects
+A DT **collection project** (for example a product with an app, a frontend and their Docker images as children) reports on its children. dtrg follows the collection setting in Dependency-Track:
+- *aggregate all direct children*;
+- *only children marked as latest version*;
+- *children with the collection tag*.
+
+Nested collections are expanded the same way. Children without a BOM yet are listed as skipped. **Show report** gives one combined dashboard. **ZIP** gives that dashboard plus a folder with the full report of every child. Email and schedules work on collections too, and pick up children added later. Charts show up to 7 projects in colour and group the rest as *Other*. `DTRG_COLLECTION_MAX_PROJECTS` (default 30) caps how many children one report may include.
+
 ### Reports by email
 With mail configured (see the *Reports by email* block in `.env.example`) the start page gets:
 - an **Email** button per project, plus **Email…** / **Schedule…** for the ticked projects (one combined report);

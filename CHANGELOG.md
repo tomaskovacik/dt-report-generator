@@ -5,7 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.0.0]
+
+### Breaking
+
+- **The Docker image runs gunicorn** (`ENTRYPOINT gunicorn --config gunicorn.conf.py app:app`) instead of `python app.py`. Containers started with a custom command need updating. It declares a `/data` volume for report subscriptions.
+- **Components are read from the CycloneDX BOM instead of `/api/v1/component/project`.** DT embeds the whole parent project (including its `directDependencies` JSON, about 1 MB for a container-image project) in every component that endpoint returns. A 4,500-component image produced an ~850 MB response that took the DT API server to ~10 GB heap and dtrg to over 12 GB. The "Last version" column now comes from the findings API, which covers exactly the vulnerable components the report lists.
+
+### Fixed
+
+- **VEX analysis past the first 100 findings was ignored.** The findings API is now paged (DT returns 100 rows by default).
+- `/api/v1/projects` without `pageSize` no longer asks DT for 99,999 projects in one response. It pages internally (100 per request).
+
+### Added
+
+- **Collection projects**: reports, ZIPs, emails and schedules for a DT collection cover its child projects according to the collection logic set in DT (all children / latest versions / tagged). Nested collections are expanded, and children without a BOM are listed as skipped. `DTRG_COLLECTION_MAX_PROJECTS` caps the size (default 30). Dashboards with more than 8 projects group the smaller ones as *Other* in the chart.
+- `docker-compose.yml` sets `mem_limit` / `memswap_limit` (`DTRG_MEM_LIMIT`, default 2g) and `pids_limit`.
 
 ### Added
 

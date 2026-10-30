@@ -653,11 +653,12 @@ def direct_map(summary):
             for c in (summary or {}).get("components") or []}
 
 
-def render(projects, path):
+def render(projects, path, collections=None):
     """ Write the dashboard page for already collected projects to `path` """
     with open(DASHBOARD_TEMPLATE, encoding="utf-8") as f:
         page = f.read()
-    data = {"generated": datetime.now().strftime("%Y-%m-%d %H:%M"), "projects": projects}
+    data = {"generated": datetime.now().strftime("%Y-%m-%d %H:%M"), "projects": projects,
+            "collections": collections or []}
     # "</" escaped so project data can never close the inline <script>
     page = page.replace("/*__DATA__*/null", json.dumps(data).replace("</", "<\\/"))
     with open(path, "w", encoding="utf-8") as f:

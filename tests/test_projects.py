@@ -153,3 +153,27 @@ def test_multi_token_search_excludes_non_matches():
     assert len(parsed) == 1
     assert parsed[0]["version"] == "1.0"
     assert total == 1
+
+
+def test_full_list_is_fetched_in_bounded_pages():
+    """ pageSize=99999 must not reach DT: every project embeds its directDependencies """
+    from backend import projects
+    pages = {1: [{"uuid": str(i), "name": f"p{i}"} for i in range(100)],
+             2: [{"uuid": "100", "name": "p100"}]}
+    sizes = []
+
+    def get(url, headers=None, verify=None, timeout=None):
+        size = int(url.split("pageSize=")[1].split("&")[0])
+        number = int(url.split("pageNumber=")[1].split("&")[0])
+        sizes.append(size)
+        res = MagicMock(status_code=200, headers={"X-Total-Count": "101"})
+        res.json.return_value = pages[number]
+        res.text = json.dumps(pages[number])
+        return res
+
+    with patch.object(projects, "check_format_url", return_value="https://dt/api/v1/"), \
+         patch.object(projects, "check_token", return_value={}), \
+         patch.object(projects.requests, "get", side_effect=get):
+        body, total = projects.get_projects("u", "t")
+    assert sizes == [100, 100]
+    assert len(json.loads(body)) == 101 and total == 101

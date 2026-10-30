@@ -3,11 +3,11 @@
 #   cp .env.example .env    # DT_URL, DT_TOKEN, DTRG_SECRET_KEY, optional SSO / API key
 #   docker compose up -d
 #
-# Pin DTRG_TAG to a release (v.2.3.0) on servers; "management-dashboard"
+# Pin DTRG_TAG to a release (v.3.0.0) on servers; "management-dashboard"
 # follows the branch. To build from this checkout instead: docker compose up -d --build
 services:
   dtrg:
-    image: ghcr.io/tomaskovacik/dt-report-generator:${DTRG_TAG:-v.2.3.0}
+    image: ghcr.io/tomaskovacik/dt-report-generator:${DTRG_TAG:-v.3.0.0}
     build: .
     container_name: dtrg
     restart: unless-stopped
@@ -23,6 +23,11 @@ services:
     volumes:
       # scheduled report subscriptions (SQLite)
       - dtrg-data:/data
+    # hard cap: a runaway report is killed instead of taking the host down
+    # (a 4,500-component image project once needed >12 GB before dtrg 3.0)
+    mem_limit: ${DTRG_MEM_LIMIT:-2g}
+    memswap_limit: ${DTRG_MEM_LIMIT:-2g}
+    pids_limit: 256
     read_only: true
     tmpfs:
       - /tmp

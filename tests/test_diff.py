@@ -172,7 +172,7 @@ def test_create_diff_report_writes_xlsx_and_summary(monkeypatch):
     call_state = {"is_b": False, "switch_after": 4}  # 4 calls for project A
     counter = {"n": 0}
 
-    def dispatch(url, headers=None, verify=None, timeout=None):
+    def dispatch(url, headers=None, verify=None, timeout=None, params=None):
         counter["n"] += 1
         if counter["n"] <= call_state["switch_after"]:
             return fixture_a(url, headers=headers, verify=verify, timeout=timeout)
@@ -211,9 +211,9 @@ def test_create_diff_report_dedups_cve_paas_into_single_batch(monkeypatch):
                                      last_bom_ms=2_000))
     counter = {"get": 0}
 
-    def dispatch(url, headers=None, verify=None, timeout=None):
+    def dispatch(url, headers=None, verify=None, timeout=None, params=None):
         counter["get"] += 1
-        if counter["get"] == 1 or 3 <= counter["get"] <= 6:
+        if counter["get"] == 1 or 3 <= counter["get"] <= 5:  # check A, check B, A: project, sbom, findings
             return fa(url)
         return fb(url)
 
@@ -277,9 +277,9 @@ def test_create_diff_report_rejects_cross_project(monkeypatch):
     ])
     counter = {"n": 0}
 
-    def dispatch(url, headers=None, verify=None, timeout=None):
+    def dispatch(url, headers=None, verify=None, timeout=None, params=None):
         counter["n"] += 1
-        if counter["n"] == 1 or 3 <= counter["n"] <= 6:
+        if counter["n"] == 1 or 3 <= counter["n"] <= 5:  # check A, check B, A: project, sbom, findings
             return fa(url)
         return fb(url)
 
@@ -307,7 +307,7 @@ def test_create_diff_report_swaps_so_newer_is_b(monkeypatch):
         "1.0", ["CVE-2024-0001", "CVE-2024-0002"], last_bom_ms=1_000))
     counter = {"n": 0}
 
-    def dispatch(url, headers=None, verify=None, timeout=None):
+    def dispatch(url, headers=None, verify=None, timeout=None, params=None):
         counter["n"] += 1
         if counter["n"] <= 4:
             return fixture_a_newer(url, headers=headers, verify=verify, timeout=timeout)

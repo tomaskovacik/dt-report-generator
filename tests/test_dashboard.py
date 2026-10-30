@@ -251,6 +251,7 @@ def test_api_dashboard_combines_projects(client):
     with patch.object(app_module, "_load_project", side_effect=loaded), \
          patch.object(app_module, "create_report") as create_report, \
          patch.object(app_module, "_resolve_params", return_value=(URL, HEADERS, "a")), \
+         patch.object(app_module.dt_collections, "expand", side_effect=lambda u, h, ps: (ps, [])), \
          patch.object(dashboard, "build_project", side_effect=build):
         res = client.post("/api/v1/reports/dashboard", json={"projects": ["a", "b", "a"]})
     assert res.status_code == 200

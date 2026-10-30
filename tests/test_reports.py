@@ -51,11 +51,19 @@ def _fake_dt_get(payloads):
     def _matches(predicate, url):
         return predicate(url) if callable(predicate) else predicate in url
 
-    def _get(url, headers=None, verify=None, timeout=None):
+    def _get(url, headers=None, verify=None, timeout=None, params=None):
+        assert "component/project" not in url, "components must come from the SBOM"
         m = MagicMock()
         m.status_code = 200
         m.raise_for_status = lambda: None
         body = next((b for pred, b in payloads if _matches(pred, url)), {})
+        if "bom/cyclonedx" in url and isinstance(body, dict) and "components" not in body:
+            # fixtures list the project's components under "component/project";
+            # DT's CycloneDX export carries them with bom-ref = component uuid
+            comps = next((b for pred, b in payloads if pred == "component/project"), [])
+            body = {**body, "components": [
+                {"bom-ref": c["uuid"], "name": c["name"], "version": c["version"], "group": c.get("group")}
+                for c in comps]}
         m.text = json.dumps(body)
         m.json = lambda b=body: b
         return m
@@ -274,3 +282,40 @@ def test_create_report_returns_value_error_on_missing_url():
         report, components = reports.create_report(cfg, td)
     assert isinstance(report, ValueError)
     assert components == []
+
+
+# DT request sizes (see DT_MEMORY_FINDINGS.md): component/project embeds the
+# whole project in every component, ~4.5 GB for a container-image project
+
+def test_components_come_from_sbom_without_extra_request():
+    comps = reports._fetch_components(
+        [{"uuid": "c1", "name": "libA", "version": "1", "group": "g"},
+         {"uuid": "c2", "name": "libB", "version": "2", "group": ""}],
+        direct_uuids=["c1"], deps_deps={"c1": ["c2"], "c2": []}, latest_by_uuid={"c1": "1.5"})
+    assert comps["c1"]["last_version"] == "1.5" and comps["c1"]["is_direct_dependency"]
+    assert comps["c1"]["dependencies"] == ["c2"]
+    assert comps["c2"]["last_version"] == "" and not comps["c2"]["is_direct_dependency"]
+
+def test_findings_are_paged_with_bounded_page_size():
+    def finding(i):
+        return {"vulnerability": {"vulnId": f"CVE-{i}"},
+                "component": {"uuid": f"c{i}", "latestVersion": f"{i}.0"},
+                "analysis": {"state": "NOT_AFFECTED", "isSuppressed": True}}
+    size = reports.FINDINGS_PAGE_SIZE
+    pages = [[finding(i) for i in range(size)], [finding(size)]]
+    calls = []
+
+    def get(url, headers=None, params=None, verify=None, timeout=None):
+        calls.append(params)
+        res = MagicMock()
+        res.raise_for_status = lambda: None
+        res.json.return_value = pages[params["pageNumber"] - 1]
+        return res
+
+    with patch.object(reports.requests, "get", side_effect=get):
+        analysis, latest = reports._fetch_findings("https://dt/api/v1/", {}, "p")
+    assert [c["pageNumber"] for c in calls] == [1, 2]
+    assert all(c["pageSize"] == size and c["suppressed"] == "true" for c in calls)
+    assert len(analysis) == size + 1  # nothing lost past DT's default of 100
+    assert analysis[("CVE-0", "c0")]["state"] == "not_affected"
+    assert latest[f"c{size}"] == f"{size}.0"

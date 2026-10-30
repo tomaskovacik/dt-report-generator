@@ -106,7 +106,13 @@ def summarize(projects):
     }
 
 
-def subject(projects, s):
-    names = projects[0]["name"] if len(projects) == 1 else f"{len(projects)} applications"
+def title(projects, collections, selected):
+    """ What the report is about: the collection, the single app, or a count """
+    if len(collections) == 1 and selected == 1:
+        return collections[0]["name"]
+    return projects[0]["name"] if len(projects) == 1 else f"{len(projects)} applications"
+
+
+def subject(title_, s):
     kev = f", {s['kev_ids']} actively exploited" if s["kev_ids"] else ""
-    return f"[dtrg] Vulnerability report: {names}: {s['critical']} critical, {s['high']} high{kev}"
+    return f"[dtrg] Vulnerability report: {title_}: {s['critical']} critical, {s['high']} high{kev}"

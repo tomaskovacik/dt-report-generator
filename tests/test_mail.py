@@ -158,8 +158,11 @@ def test_summary_numbers_and_quick_fix():
     assert comm["name"] == "comm" and comm["status"][1] == "Exploited: act now"
     assert comm["top"][0]["label"] == "Spring Boot" and comm["top"][0]["to"] == "4.0.9"
     assert "now: tomcat.version=9.0.121" in s["p1_rows"][0]["libs"][0]
-    assert mail_summary.subject([_project("comm", kev=True)], mail_summary.summarize([_project("comm", kev=True)])) == \
+    one = [_project("comm", kev=True)]
+    assert mail_summary.subject(mail_summary.title(one, [], 1), mail_summary.summarize(one)) == \
         "[dtrg] Vulnerability report: comm: 1 critical, 0 high, 1 actively exploited"
+    assert mail_summary.title(one * 3, [{"name": "WORKTIME"}], 1) == "WORKTIME"
+    assert mail_summary.title(one * 3, [], 3) == "3 applications"
 
 def test_email_body_renders_without_scripts():
     s = mail_summary.summarize([_project("comm", kev=True)])
@@ -201,7 +204,7 @@ def test_send_now_rejects_bad_projects(client):
 
 def test_send_report_email_builds_body_and_attachment(client):
     collected = [_project("comm", kev=True)]
-    with patch.object(app_module, "_build_dashboard_data", return_value=(collected, None)), \
+    with patch.object(app_module, "_build_dashboard_data", return_value=({"projects": collected, "collections": []}, None)), \
          patch.object(app_module.mailer, "send") as send, app_module.app.test_request_context():
         app_module.send_report_email([UUID_A], ["a@example.com"])
     recipients, subject, html, attachments = send.call_args.args
