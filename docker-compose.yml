@@ -1,0 +1,29 @@
+# dtrg with the image published by .github/workflows/publish.yml
+#
+#   cp .env.example .env    # DT_URL, DT_TOKEN, DTRG_SECRET_KEY, optional SSO / API key
+#   docker compose up -d
+#
+# Pin DTRG_TAG to a release (v.2.3.0) on servers; "management-dashboard"
+# follows the branch. To build from this checkout instead: docker compose up -d --build
+services:
+  dtrg:
+    image: ghcr.io/tomaskovacik/dt-report-generator:${DTRG_TAG:-v.2.3.0}
+    build: .
+    container_name: dtrg
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # must listen on all interfaces inside the container, whatever .env says
+      DTRG_HOST: 0.0.0.0
+      DTRG_PORT: "5000"
+    ports:
+      # host port from DTRG_PUBLISH_PORT (default 5000); prefix with
+      # 127.0.0.1: to expose only to a reverse proxy on the same host
+      - "${DTRG_PUBLISH_PORT:-5000}:5000"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
