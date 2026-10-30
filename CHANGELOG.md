@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Release workflow no longer runs Trivy.** The image build is gated on pytest only. Vulnerability scanning moved to GitHub's built-in features: CodeQL code scanning (default setup), Dependabot alerts / security updates and secret scanning with push protection. The Trivy DB download from `public.ecr.aws` was failing CI with rate limits (`TOOMANYREQUESTS`).
+
 ## [2.3.0]
 
 ### Added
