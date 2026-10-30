@@ -39,13 +39,14 @@ from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.utils import secure_filename
 
-from backend import auth, dashboard
+from backend import auth, dashboard, mail_summary, mailer, scheduler, store
 from backend.dependency_graph import get_graph
 from backend.param_validators import projects_page_size
 from backend.projects import get_projects
 from backend.reports import (
     DIFF_ERROR_CROSS_PROJECT_PREFIX,
     DIFF_ERROR_SAME_PROJECT,
+    _load_project,
     _resolve_params,
     create_diff_report,
     create_report,
@@ -53,7 +54,9 @@ from backend.reports import (
 
 # Logging setup
 logging.basicConfig(
-    format="%(asctime)s - [%(levelname)s] [%(name)s] %(message)s"
+    format="%(asctime)s - [%(levelname)s] [%(name)s] %(message)s",
+    # set here, not only under __main__, so gunicorn workers log at INFO too
+    level=logging.DEBUG if os.getenv("DTRG_DEBUG", "False").lower() in ["true", "1", "t"] else logging.INFO,
 )
 logger = logging.getLogger(__name__)
 
@@ -196,6 +199,19 @@ def health():
               example: 2.0.0
     """
     return jsonify(status="ok", version=__version__)
+
+
+@app.route("/favicon.ico", methods=["GET"])
+def favicon():
+    """Browser tab icon.
+    ---
+    tags:
+      - probe
+    responses:
+      200:
+        description: SVG icon.
+    """
+    return app.send_static_file("favicon.svg")
 
 
 # INDEX PAGE
@@ -530,31 +546,37 @@ def _project_ids(values):
 
 def _build_dashboard(config, projects, output_dir):
     """ One combined page for several projects -> (html_path, name_or_error) """
+    collected, err = _build_dashboard_data(config, projects, output_dir)
+    if err is not None:
+        return None, err
+    path = dashboard.render(collected, os.path.join(output_dir, "dashboard.html"))
+    return path, f"dashboard {datetime.now().strftime('%d.%m.%Y')}"
+
+def _dashboard_project(url, headers, project):
+    """ Dashboard data straight from DT, without rendering docx / xlsx / ZIP """
+    data = _load_project(url, headers, project)
+    components = data["components"]
+    version = data["info"].get("version")
+    label = " ".join(x for x in (data["name"], None if version == "no version" else version) if x) or project
+    graph = get_graph(components) if components else None
+    tree = dashboard.graph_tree(render_template("graph.html", graph=graph)) if graph else None
+    return dashboard.build_project(url, headers, project, label, tree, graph=components)
+
+def _build_dashboard_data(config, projects, output_dir):
+    """ Dashboard data for several projects -> (collected, None) or (None, error) """
     if not projects:
         return None, ValueError("Select at least one project")
     if len(projects) > dashboard_max_projects():
         return None, ValueError(f"At most {dashboard_max_projects()} projects per dashboard")
     try:
         url, headers, _ = _resolve_params({**config, "project": [projects[0]]})
-        collected = []
-        for i, project in enumerate(projects):
-            sub = os.path.join(output_dir, str(i))
-            os.makedirs(sub)
-            # the regular report pipeline provides the dependency tree and
-            # direct-dependency flags; its docx/xlsx are discarded
-            report, components = create_report({**config, "project": [project]}, sub)
-            if not isinstance(report, str):
-                return None, report
-            if components:
-                _create_graph(components, sub)
-            collected.append(_collect_dashboard_project(url, headers, project, sub, components))
+        collected = [_dashboard_project(url, headers, project) for project in projects]
     except (ValueError, ConnectionError) as e:
         return None, e
     except Exception as e:  # pylint: disable=broad-except
         logger.exception("Dashboard generation failed")
         return None, e
-    path = dashboard.render(collected, os.path.join(output_dir, "dashboard.html"))
-    return path, f"dashboard {datetime.now().strftime('%d.%m.%Y')}"
+    return collected, None
 
 def _dashboard_user_error(err):
     """ Input errors that are safe and useful to show to the user """
@@ -728,11 +750,10 @@ def view_report(project):
     """
     if not _UUID_RE.match(project):
         return _error_page("Unknown project.", 404)
-    output_dir = _temp_output_dir()
-    zip_path, report = _build_report({"project": [project]}, output_dir)
-    path = os.path.join(output_dir, "dashboard.html")
-    if not zip_path or not os.path.exists(path):
-        logger.error(f"Report view failed: {report}")
+    # dashboard only: no docx / xlsx / ZIP for a page that is just viewed
+    path, name = _build_dashboard({}, [project], _temp_output_dir())
+    if not path:
+        logger.error(f"Report view failed: {name}")
         return _error_page(_GENERIC_REPORT_FAILURE, 502)
     return send_file(path, mimetype="text/html")
 
@@ -795,6 +816,215 @@ def view_dashboard():
         user_error = _dashboard_user_error(name)
         return _error_page(user_error or _GENERIC_REPORT_FAILURE, 400 if user_error else 502)
     return send_file(path, mimetype="text/html")
+
+
+# EMAIL GROUP
+# Reports by mail, now or on a schedule. Mail clients strip JavaScript, so
+# the body is a static summary and the interactive dashboard is attached.
+def send_report_email(projects, recipients, note=None):
+    """ Build the dashboard for `projects` and mail it; raises mailer.MailError """
+    recipients = mailer.check_recipients(recipients)
+    output_dir = _new_output_dir()
+    try:
+        collected, err = _build_dashboard_data({}, projects, output_dir)
+        if err is not None:
+            logger.error(f"Report for email failed: {err}")
+            raise mailer.MailError(_dashboard_user_error(err) or _GENERIC_REPORT_FAILURE)
+        path = dashboard.render(collected, os.path.join(output_dir, "dashboard.html"))
+        stamp = datetime.now().strftime("%Y-%m-%d")
+        label = collected[0]["name"] if len(collected) == 1 else "combined"
+        attachment = secure_filename(f"dashboard_{label}_{stamp}.html") or "dashboard.html"
+        summary = mail_summary.summarize(collected)
+        html = render_template("email_summary.html", s=summary, attachment=attachment, note=note,
+                               generated=datetime.now().strftime("%Y-%m-%d %H:%M"),
+                               public_url=os.getenv("DTRG_PUBLIC_URL"))
+        with open(path, "rb") as f:
+            mailer.send(recipients, mail_summary.subject(collected, summary), html,
+                        [(attachment, f.read(), "text/html")])
+    finally:
+        shutil.rmtree(output_dir, ignore_errors=True)
+
+def _owner():
+    """ Subscriptions belong to the signed-in user; without SSO they are shared """
+    user = auth.current_user()
+    return (user["username"] or user["oid"], user.get("name")) if user else ("shared", None)
+
+def _json_error(message, status=400):
+    return jsonify(error=message), status
+
+@app.route("/ui/mail", methods=["GET"])
+def ui_mail_config():
+    """Mail settings the start page needs (no secrets).
+    ---
+    tags:
+      - browser
+    responses:
+      200:
+        description: '{"enabled": bool, "defaultRecipient": str, "allowed": [...], "timezone": str}'
+    """
+    user = auth.current_user() or {}
+    return jsonify(enabled=mailer.enabled(), backend=mailer.backend(), allowed=mailer._allowed(),
+                   defaultRecipient=user.get("username") or "", timezone=str(store.tz()),
+                   maxProjects=dashboard_max_projects())
+
+@app.route("/ui/email", methods=["POST"])
+def ui_send_email():
+    """Email a report now: {"projects": [uuid, ...], "recipients": [email, ...]}.
+    ---
+    tags:
+      - browser
+    responses:
+      200:
+        description: Sent.
+      400:
+        description: Not configured, recipient not allowed, or report failed.
+    """
+    body = request.get_json(silent=True) or {}
+    projects = _project_ids(body.get("projects") if isinstance(body.get("projects"), list) else [])
+    if not projects or not all(_UUID_RE.match(p) for p in projects):
+        return _json_error("Select at least one project")
+    try:
+        send_report_email(projects, body.get("recipients") or [])
+    except mailer.MailError as e:
+        return _json_error(str(e))
+    return jsonify(ok=True)
+
+def _sub_view(sub):
+    return {k: sub[k] for k in ("id", "owner_name", "projects", "recipients", "frequency", "hour",
+                                "weekday", "day", "next_run", "last_run", "last_status")}
+
+@app.route("/ui/subscriptions", methods=["GET"])
+def ui_list_subscriptions():
+    """The signed-in user's report subscriptions (all of them when SSO is off).
+    ---
+    tags:
+      - browser
+    responses:
+      200:
+        description: '{"items": [...]}'
+    """
+    return jsonify(items=[_sub_view(s) for s in store.list_for(_owner()[0])])
+
+@app.route("/ui/subscriptions", methods=["POST"])
+def ui_create_subscription():
+    """Create a scheduled report.
+    ---
+    tags:
+      - browser
+    parameters:
+      - in: body
+        name: body
+        schema:
+          type: object
+          properties:
+            projects: {type: array, items: {type: object}, description: '[{"uuid", "label"}]'}
+            recipients: {type: array, items: {type: string}}
+            frequency: {type: string, enum: [daily, weekly, monthly]}
+            hour: {type: integer, description: 0-23 in DTRG_TIMEZONE}
+            weekday: {type: integer, description: 0 = Monday (weekly)}
+            day: {type: integer, description: 1-28 (monthly)}
+    responses:
+      200:
+        description: The new subscription.
+      400:
+        description: Invalid input.
+    """
+    if not mailer.enabled():
+        return _json_error("Email is not configured on this dtrg instance")
+    body = request.get_json(silent=True) or {}
+    projects = []
+    for p in body.get("projects") or []:
+        uuid = str((p or {}).get("uuid") or "")
+        if _UUID_RE.match(uuid) and uuid not in [x["uuid"] for x in projects]:
+            projects.append({"uuid": uuid, "label": str(p.get("label") or uuid)[:200]})
+    if not projects:
+        return _json_error("Select at least one project")
+    if len(projects) > dashboard_max_projects():
+        return _json_error(f"At most {dashboard_max_projects()} projects per report")
+    try:
+        recipients = mailer.check_recipients(body.get("recipients") or [])
+    except mailer.MailError as e:
+        return _json_error(str(e))
+    frequency = body.get("frequency")
+    try:
+        hour = int(body.get("hour", 7))
+        weekday = int(body["weekday"]) if frequency == "weekly" else None
+        day = int(body["day"]) if frequency == "monthly" else None
+    except (KeyError, TypeError, ValueError):
+        return _json_error("Pick when to send it")
+    if frequency not in store.FREQUENCIES or not 0 <= hour <= 23 \
+            or (weekday is not None and not 0 <= weekday <= 6) or (day is not None and not 1 <= day <= 28):
+        return _json_error("Pick when to send it")
+    owner, owner_name = _owner()
+    sub = store.create(owner, owner_name, projects, recipients, frequency, hour, weekday, day)
+    logger.info(f"Subscription {sub['id']} created by {owner}")
+    return jsonify(_sub_view(sub))
+
+def _own_subscription(sub_id):
+    sub = store.get(sub_id)
+    return sub if sub and sub["owner"] == _owner()[0] else None
+
+@app.route("/ui/subscriptions/<int:sub_id>", methods=["DELETE"])
+def ui_delete_subscription(sub_id):
+    """Delete one of your subscriptions.
+    ---
+    tags:
+      - browser
+    responses:
+      200:
+        description: Deleted.
+      404:
+        description: Not found or not yours.
+    """
+    if not _own_subscription(sub_id):
+        return _json_error("Not found", 404)
+    store.delete(sub_id)
+    return jsonify(ok=True)
+
+@app.route("/ui/subscriptions/<int:sub_id>/run", methods=["POST"])
+def ui_run_subscription(sub_id):
+    """Send one of your subscriptions right now (the schedule is unchanged).
+    ---
+    tags:
+      - browser
+    responses:
+      200:
+        description: Sent.
+      400:
+        description: Sending failed.
+      404:
+        description: Not found or not yours.
+    """
+    sub = _own_subscription(sub_id)
+    if not sub:
+        return _json_error("Not found", 404)
+    try:
+        run_subscription(sub)
+    except mailer.MailError as e:
+        return _json_error(str(e))
+    return jsonify(ok=True)
+
+def run_subscription(sub):
+    """ Send a subscription's report and record the outcome """
+    try:
+        send_report_email([p["uuid"] for p in sub["projects"]], sub["recipients"],
+                          note=f"Scheduled report ({sub['frequency']})"
+                               + ("" if sub["owner"] == "shared" else f" set up by {sub['owner_name'] or sub['owner']}") + ".")
+    except mailer.MailError as e:
+        store.record_run(sub["id"], f"failed: {e}")
+        raise
+    except Exception as e:
+        store.record_run(sub["id"], "failed: internal error")
+        logger.exception(f"Subscription {sub['id']} failed")
+        raise mailer.MailError(_GENERIC_REPORT_FAILURE) from e
+    store.record_run(sub["id"], "sent")
+
+
+# the scheduler sends due subscriptions; off when mail is not configured,
+# in tests, and in the Werkzeug reloader's parent process
+if mailer.enabled() and os.getenv("DTRG_SCHEDULER", "true").lower() in ["true", "1", "t"] \
+        and not (os.getenv("DTRG_DEBUG", "").lower() in ["true", "1", "t"] and os.getenv("WERKZEUG_RUN_MAIN") != "true"):
+    scheduler.start(app, run_subscription)
 
 
 # PROJECTS GROUP

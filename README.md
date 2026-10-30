@@ -51,6 +51,13 @@ Every report ZIP now also has a `dashboard.html`. It is a self-contained page (n
 
 Fix versions come from the GitHub Advisory DB (`first_patched_version`) and DT's affected-version ranges (incl. NVD CPE ranges). Each candidate is checked on Maven Central / npm. When the only fix for your release line is a commercial build (typical for Spring / Tomcat EOL lines), the page says so and suggests the newest public release instead. These lookups are best effort: if they fail, the fix column stays empty and the report is still produced. Set `DTRG_DASHBOARD_ENRICH=false` on air-gapped installs. The DT API key needs `VIEW_PORTFOLIO` and `VIEW_VULNERABILITY`.
 
+### Reports by email
+With mail configured (see the *Reports by email* block in `.env.example`) the start page gets:
+- an **Email** button per project, plus **Email…** / **Schedule…** for the ticked projects (one combined report);
+- **Scheduled reports**: daily, weekly or monthly at a chosen hour (`DTRG_TIMEZONE`), with *Send now* and *Delete*. With SSO on, each user sees and manages only their own schedules. Without SSO the list is shared.
+
+The email body is a static summary (verdict, KPIs, per-app status, Spring Boot quick fixes with the `<properties>` snippet, the P1 list), because mail clients strip JavaScript. The full interactive dashboard is attached as one HTML file. Sending works over **SMTP** or **Microsoft Graph** (`Mail.Send` application permission; it can reuse the SSO app registration). Recipients must match `DTRG_MAIL_ALLOWED_RECIPIENTS`. Schedules are stored in a SQLite file in `DTRG_DATA_DIR` (`/data` in the image; `docker-compose.yml` mounts a volume there).
+
 ### Single sign-on (Microsoft Entra ID)
 The browser UI can require a Microsoft login (OpenID Connect, authorization code + PKCE). It is off by default. When it is on, the form, downloads, dashboard and Swagger UI need a signed-in user. `/health` stays open for probes, and `/api/v1/*` keeps using `DTRG_API_KEY` for CI.
 

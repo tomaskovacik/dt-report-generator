@@ -240,18 +240,24 @@ def test_single_report_survives_dashboard_failure(client):
 
 def test_api_dashboard_combines_projects(client):
     seen = []
-    def build(url, headers, project, name, tree, direct, graph=None):
-        seen.append(project)
+    def build(url, headers, project, name, tree, direct=None, graph=None):
+        seen.append((project, name, bool(tree), sorted(graph)))
         return {"name": name, "uuid": project, "dtLink": "", "counts": {}, "components": {},
                 "vulns": [], "tree": tree}
-    with patch.object(app_module, "create_report", side_effect=_fake_create_report), \
+    comps = {"c1": {"name": "lib", "version": "1", "group": "", "last_version": "", "dependencies": [],
+                    "is_direct_dependency": True, "vulnerabilities": [], "severity": ""}}
+    loaded = lambda url, headers, project: {  # noqa: E731
+        "name": "app-" + project, "info": {"version": "no version"}, "components": comps}
+    with patch.object(app_module, "_load_project", side_effect=loaded), \
+         patch.object(app_module, "create_report") as create_report, \
          patch.object(app_module, "_resolve_params", return_value=(URL, HEADERS, "a")), \
          patch.object(dashboard, "build_project", side_effect=build):
         res = client.post("/api/v1/reports/dashboard", json={"projects": ["a", "b", "a"]})
     assert res.status_code == 200
     assert res.mimetype == "text/html"
-    assert seen == ["a", "b"]
+    assert seen == [("a", "app-a", True, ["c1"]), ("b", "app-b", True, ["c1"])]
     assert b'"uuid": "b"' in res.data
+    create_report.assert_not_called()  # no docx / xlsx for a dashboard
 
 def test_api_dashboard_requires_list(client):
     res = client.post("/api/v1/reports/dashboard", json={"projects": "a"})
@@ -320,12 +326,19 @@ def _fake_build_report(config, output_dir):
     return zip_path, "api 1.0 (29.10.2026)"
 
 def test_view_report_inline(client, dt_env):
-    with patch.object(app_module, "_build_report", side_effect=_fake_build_report) as build:
+    def fake(config, projects, output_dir):
+        path = os.path.join(output_dir, "dashboard.html")
+        with open(path, "w") as f:
+            f.write("<html>dash</html>")
+        return path, "dashboard"
+    with patch.object(app_module, "_build_dashboard", side_effect=fake) as build, \
+         patch.object(app_module, "_build_report") as zip_pipeline:
         res = client.get(f"/projects/{UUID_A}/report")
     assert res.status_code == 200 and res.mimetype == "text/html"
     assert "attachment" not in res.headers.get("Content-Disposition", "")
     assert res.data == b"<html>dash</html>"
-    assert build.call_args.args[0] == {"project": [UUID_A]}
+    assert build.call_args.args[1] == [UUID_A]
+    zip_pipeline.assert_not_called()  # viewing builds no ZIP
 
 def test_download_report_zip(client, dt_env):
     with patch.object(app_module, "_build_report", side_effect=_fake_build_report):
@@ -335,7 +348,7 @@ def test_download_report_zip(client, dt_env):
     assert "api_1.0_29.10.2026.zip" in res.headers["Content-Disposition"]
 
 def test_report_failure_shows_error_page(client, dt_env):
-    with patch.object(app_module, "_build_report", return_value=(None, ValueError("secret"))):
+    with patch.object(app_module, "_build_dashboard", return_value=(None, ValueError("secret"))):
         res = client.get(f"/projects/{UUID_A}/report")
     assert res.status_code == 502
     assert b"Report generation failed" in res.data and b"secret" not in res.data

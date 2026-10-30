@@ -4,6 +4,7 @@
 
 {% block head %}
     {{ super() }}
+    <meta name="csrf-token" content="{{ csrf_token() }}">
     <style>
         :root {
             --sev-critical: #d03b3b; --sev-high: #ec835a; --sev-medium: #fab219; --sev-low: #898781;
@@ -36,6 +37,9 @@
         .footer-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 12px; font-size: 13px; color: #6c6b66; }
         .empty { padding: 32px !important; text-align: center; color: #8a8983; }
         tr.is-selected td { background: #f3f7fd !important; }
+        .subs td, .subs th { font-size: 13px; }
+        .subs .status-ok { color: #0a7d0a; } .subs .status-bad { color: #d03b3b; }
+        .modal .proj-list { font-size: 13px; color: #55544f; }
     </style>
 {% endblock %}
 
@@ -60,10 +64,22 @@
         <code>.env</code> next to <code>app.py</code> (see <code>.env.example</code>) and restart dtrg.
     </div>
     {% else %}
+    <div class="card bg-white mb-3 mail-only" id="subsCard" hidden>
+        <div class="toolbar" style="justify-content: space-between">
+            <b>Scheduled reports</b>
+            <span class="meta" id="subsTz"></span>
+        </div>
+        <div class="table-responsive"><table class="table subs"><thead><tr>
+            <th>Projects</th><th>Recipients</th><th>When</th><th>Next</th><th>Last run</th><th></th>
+        </tr></thead><tbody id="subs"></tbody></table></div>
+    </div>
+
     <div class="card bg-white">
         <div class="toolbar">
             <input type="search" id="q" class="form-control form-control-sm" placeholder="Search projects by name, or paste a UUID" autocomplete="off">
             <button class="btn btn-sm btn-dark" id="combined" disabled>Show combined dashboard</button>
+            <button class="btn btn-sm btn-outline-dark mail-only" id="mailSel" disabled hidden>Email…</button>
+            <button class="btn btn-sm btn-outline-dark mail-only" id="schedSel" disabled hidden>Schedule…</button>
             <button class="btn btn-sm btn-link" id="clearSel" hidden>Clear selection</button>
         </div>
         <div class="selected" id="selected"></div>
@@ -94,6 +110,43 @@
         </div>
     </div>
     <div class="alert alert-danger mt-3" id="err" hidden></div>
+    <div class="alert alert-success mt-3" id="ok" hidden></div>
+
+    <div class="modal fade" id="mailModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog"><div class="modal-content">
+            <div class="modal-header"><h5 class="modal-title" id="mailTitle">Email report</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+            <div class="modal-body">
+                <div class="proj-list mb-2" id="mailProjects"></div>
+                <label class="form-label small mb-1" for="mailTo">Recipients (comma separated)</label>
+                <textarea class="form-control form-control-sm" id="mailTo" rows="2"></textarea>
+                <div class="form-text" id="mailAllowed"></div>
+                <div id="schedFields" class="mt-3" hidden>
+                    <div class="row g-2">
+                        <div class="col-4"><label class="form-label small mb-1">Every</label>
+                            <select class="form-select form-select-sm" id="freq">
+                                <option value="daily">day</option><option value="weekly" selected>week</option><option value="monthly">month</option>
+                            </select></div>
+                        <div class="col-4" id="wdBox"><label class="form-label small mb-1">On</label>
+                            <select class="form-select form-select-sm" id="weekday">
+                                <option value="0">Monday</option><option value="1">Tuesday</option><option value="2">Wednesday</option>
+                                <option value="3">Thursday</option><option value="4">Friday</option><option value="5">Saturday</option><option value="6">Sunday</option>
+                            </select></div>
+                        <div class="col-4" id="dayBox" hidden><label class="form-label small mb-1">Day</label>
+                            <input type="number" min="1" max="28" value="1" class="form-control form-control-sm" id="day"></div>
+                        <div class="col-4"><label class="form-label small mb-1">At</label>
+                            <select class="form-select form-select-sm" id="hour"></select></div>
+                    </div>
+                </div>
+                <div class="alert alert-danger small mt-3 mb-0" id="mailErr" hidden></div>
+            </div>
+            <div class="modal-footer">
+                <span class="meta me-auto">The report takes 10–60 s to build.</span>
+                <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-sm btn-primary" id="mailGo">Send</button>
+            </div>
+        </div></div>
+    </div>
     <p class="meta mt-3" style="font-size: 12px; color: #8a8983">
         <b>Show report</b> opens the project's management dashboard in a new tab.
         <b>ZIP</b> downloads the full report (Word, Excel, summary.json, dependency graph, dashboard).
@@ -164,6 +217,7 @@
         $("combined").disabled = n < 1 || n > MAX;
         $("combined").textContent = n ? `Show combined dashboard (${n})` : "Show combined dashboard";
         $("clearSel").hidden = !n;
+        $("mailSel").disabled = $("schedSel").disabled = n < 1 || n > MAX;
         $("selected").innerHTML = [...state.selected].map(([uuid, name]) =>
             `<span class="chip">${esc(name)}<button data-unsel="${esc(uuid)}" title="Remove">×</button></span>`).join("") +
             (n > MAX ? `<span class="text-danger small">At most ${MAX} projects per dashboard</span>` : "");
@@ -186,8 +240,104 @@
             <td class="actions">
                 <button class="btn btn-sm btn-primary" data-view="${esc(p.uuid)}" data-label="${esc(label(p))}">Show report</button>
                 <button class="btn btn-sm btn-outline-secondary" data-zip="${esc(p.uuid)}" title="Download ZIP (docx, xlsx, json, graph, dashboard)">ZIP</button>
+                ${MAIL.enabled ? `<button class="btn btn-sm btn-outline-secondary" data-mail="${esc(p.uuid)}" data-label="${esc(label(p))}" title="Email this report">Email</button>` : ""}
             </td></tr>`).join("");
         renderSelection();
+    }
+
+    /* ---------- email & schedules ---------- */
+    const MAIL = {enabled: false, allowed: [], defaultRecipient: "", timezone: "UTC"};
+    const CSRF = document.querySelector('meta[name="csrf-token"]').content;
+    const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+    let modal, mailCtx = null;
+
+    async function api(method, url, body) {
+        const res = await fetch(url, {method, credentials: "same-origin",
+            headers: {"Content-Type": "application/json", "X-CSRFToken": CSRF},
+            body: body ? JSON.stringify(body) : undefined});
+        if (res.status === 401) { location.reload(); throw new Error("login required"); }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "Request failed");
+        return data;
+    }
+    function showOk(msg) { const e = $("ok"); e.textContent = msg; e.hidden = !msg; if (msg) setTimeout(() => e.hidden = true, 8000); }
+    const when = s => s.frequency === "daily" ? `daily at ${s.hour}:00`
+        : s.frequency === "weekly" ? `every ${DAYS[s.weekday]} at ${s.hour}:00` : `monthly on day ${s.day} at ${s.hour}:00`;
+    const fmt = iso => iso ? new Date(iso).toLocaleString([], {dateStyle: "short", timeStyle: "short"}) : "–";
+
+    async function loadSubs() {
+        if (!MAIL.enabled) return;
+        const {items} = await api("GET", "/ui/subscriptions");
+        $("subsCard").hidden = !items.length;
+        $("subs").innerHTML = items.map(s => `<tr>
+            <td>${s.projects.map(p => esc(p.label)).join(", ")}${s.owner_name ? `<div class="meta">by ${esc(s.owner_name)}</div>` : ""}</td>
+            <td>${s.recipients.map(esc).join(", ")}</td>
+            <td>${when(s)}</td>
+            <td class="when">${fmt(s.next_run)}</td>
+            <td class="when">${s.last_run ? `${fmt(s.last_run)} <span class="${/^sent/.test(s.last_status) ? "status-ok" : "status-bad"}">${esc(s.last_status)}</span>` : "–"}</td>
+            <td class="actions"><button class="btn btn-sm btn-outline-secondary" data-run="${s.id}">Send now</button>
+                <button class="btn btn-sm btn-outline-danger" data-del="${s.id}">Delete</button></td></tr>`).join("");
+    }
+
+    function openMail(schedule, projects) {
+        mailCtx = {schedule, projects};
+        $("mailTitle").textContent = schedule ? "Schedule report" : "Email report";
+        $("mailGo").textContent = schedule ? "Save schedule" : "Send";
+        $("mailProjects").innerHTML = `<b>${projects.length > 1 ? "Combined report for" : "Report for"}:</b> ` + projects.map(p => esc(p.label)).join(", ");
+        $("mailTo").value = $("mailTo").value || MAIL.defaultRecipient;
+        $("schedFields").hidden = !schedule;
+        $("mailErr").hidden = true;
+        modal.show();
+    }
+
+    async function submitMail() {
+        const btn = $("mailGo"), old = btn.textContent;
+        const recipients = $("mailTo").value.split(/[,;\s]+/).filter(Boolean);
+        btn.disabled = true; btn.textContent = mailCtx.schedule ? "Saving…" : "Building & sending…";
+        $("mailErr").hidden = true;
+        try {
+            if (mailCtx.schedule) {
+                const f = $("freq").value;
+                await api("POST", "/ui/subscriptions", {projects: mailCtx.projects, recipients, frequency: f,
+                    hour: +$("hour").value, weekday: f === "weekly" ? +$("weekday").value : undefined,
+                    day: f === "monthly" ? +$("day").value : undefined});
+                showOk("Schedule saved.");
+                loadSubs();
+            } else {
+                await api("POST", "/ui/email", {projects: mailCtx.projects.map(p => p.uuid), recipients});
+                showOk(`Report sent to ${recipients.join(", ")}.`);
+            }
+            modal.hide();
+        } catch (e) {
+            $("mailErr").textContent = e.message; $("mailErr").hidden = false;
+        } finally {
+            btn.disabled = false; btn.textContent = old;
+        }
+    }
+
+    async function initMail() {
+        try { Object.assign(MAIL, await api("GET", "/ui/mail")); } catch (e) { return; }
+        if (!MAIL.enabled) return;
+        document.querySelectorAll(".mail-only").forEach(el => { if (el.id !== "subsCard") el.hidden = false; });
+        modal = new bootstrap.Modal($("mailModal"));
+        $("mailAllowed").textContent = `Allowed: ${MAIL.allowed.join(", ")}`;
+        $("subsTz").textContent = `times in ${MAIL.timezone}`;
+        $("hour").innerHTML = [...Array(24).keys()].map(h => `<option value="${h}" ${h === 7 ? "selected" : ""}>${String(h).padStart(2, "0")}:00</option>`).join("");
+        $("freq").onchange = () => { $("wdBox").hidden = $("freq").value !== "weekly"; $("dayBox").hidden = $("freq").value !== "monthly"; };
+        $("mailGo").onclick = submitMail;
+        const sel = () => [...state.selected].map(([uuid, label]) => ({uuid, label}));
+        $("mailSel").onclick = () => openMail(false, sel());
+        $("schedSel").onclick = () => openMail(true, sel());
+        $("subs").addEventListener("click", async e => {
+            const run = e.target.closest("[data-run]"), del = e.target.closest("[data-del]");
+            try {
+                if (run) { run.disabled = true; run.textContent = "Sending…"; await api("POST", `/ui/subscriptions/${run.dataset.run}/run`); showOk("Report sent."); }
+                if (del && confirm("Delete this scheduled report?")) { await api("DELETE", `/ui/subscriptions/${del.dataset.del}`); }
+            } catch (err) { showError(err.message); }
+            loadSubs();
+        });
+        loadSubs();
+        load();
     }
 
     let seq = 0;
@@ -225,6 +375,8 @@
         const view = e.target.closest("[data-view]"), zip = e.target.closest("[data-zip]");
         if (view) openReport(`/projects/${encodeURIComponent(view.dataset.view)}/report`, view.dataset.label);
         if (zip) downloadZip(zip, zip.dataset.zip);
+        const mail = e.target.closest("[data-mail]");
+        if (mail) openMail(false, [{uuid: mail.dataset.mail, label: mail.dataset.label}]);
     });
     $("rows").addEventListener("change", e => {
         const cb = e.target.closest("input[type=checkbox]");
@@ -243,6 +395,7 @@
         openReport(`/dashboard?${qs}`, `${state.selected.size} projects`);
     };
     load();
+    initMail();
 })();
 </script>
 {% endif %}

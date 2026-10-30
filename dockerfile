@@ -12,11 +12,17 @@ RUN pip install --upgrade pip && pip install -r requirements.txt \
 
 COPY . /app
 
-RUN addgroup -S dtrg && adduser -S dtrg -G dtrg && chown -R dtrg:dtrg /app
+# /data holds the subscription database (mount a volume there)
+RUN addgroup -S dtrg && adduser -S dtrg -G dtrg && mkdir -p /data \
+    && chown -R dtrg:dtrg /app /data
+ENV DTRG_DATA_DIR=/data
+VOLUME ["/data"]
 USER dtrg
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD wget -qO- "http://127.0.0.1:${DTRG_PORT:-5000}/health" >/dev/null || exit 1
 
-ENTRYPOINT [ "python" ]
-CMD [ "app.py" ]
+# production WSGI server; settings in gunicorn.conf.py (DTRG_HOST / DTRG_PORT
+# / DTRG_THREADS / DTRG_REQUEST_TIMEOUT)
+ENTRYPOINT [ "gunicorn", "--config", "gunicorn.conf.py" ]
+CMD [ "app:app" ]

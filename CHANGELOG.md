@@ -9,10 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Reports by email**, sent now or on a schedule (daily / weekly / monthly in `DTRG_TIMEZONE`). Sending goes over SMTP or Microsoft Graph (`DTRG_MAIL_BACKEND`), only to addresses matching `DTRG_MAIL_ALLOWED_RECIPIENTS`. The body is a static summary (mail clients strip JavaScript) and the interactive dashboard is attached. Subscriptions are stored per SSO user in SQLite (`DTRG_DATA_DIR`). An in-process scheduler claims due runs atomically.
+- `/favicon.ico`.
 - `docker-compose.yml` for the published GHCR image (pinned release tag by default, read-only root filesystem, all capabilities dropped).
 
 ### Changed
 
+- **The Docker image runs gunicorn** (`gunicorn.conf.py`: one process, `DTRG_THREADS` threads, `DTRG_REQUEST_TIMEOUT`) instead of Flask's development server. It gets a `/data` volume for subscriptions.
+- **"Show report", the combined dashboard and emails no longer build docx / xlsx / ZIP.** They load the DT data directly and render only the dashboard. The ZIP is built only for downloads.
 - **Release workflow no longer runs Trivy.** The image build is gated on pytest only. Vulnerability scanning moved to GitHub's built-in features: CodeQL code scanning (default setup), Dependabot alerts / security updates and secret scanning with push protection. The Trivy DB download from `public.ecr.aws` was failing CI with rate limits (`TOOMANYREQUESTS`).
 
 ## [2.3.0]

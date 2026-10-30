@@ -29,9 +29,9 @@ logger = logging.getLogger(__name__)
 bp = Blueprint("auth", __name__, url_prefix="/auth")
 
 # Endpoints that never need a browser session
-_PUBLIC_PREFIXES = ("/health", "/auth/", "/api/v1/", "/static/")
+_PUBLIC_PREFIXES = ("/health", "/auth/", "/api/v1/", "/static/", "/favicon.ico")
 # Endpoints called from page scripts: answer 401 instead of a login redirect
-_AJAX_PATHS = ("/ui/projects",)
+_AJAX_PATHS = ("/ui/",)
 
 
 def enabled() -> bool:
@@ -122,7 +122,7 @@ def _require_login():
     path = request.path
     if path.startswith(_PUBLIC_PREFIXES) or current_user():
         return None
-    if path in _AJAX_PATHS:
+    if path.startswith(_AJAX_PATHS):
         return jsonify(error="login required"), 401
     # a form POST cannot be replayed after the login round-trip: back to the form
     target = request.full_path.rstrip("?") if request.method == "GET" else "/"

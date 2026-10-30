@@ -1,0 +1,97 @@
+{#- Email body: inline styles and tables only, no scripts (mail clients strip them) -#}
+{%- set C = {"critical": "#d03b3b", "serious": "#ec835a", "warning": "#fab219", "good": "#0a7d0a", "ink": "#0b0b0b", "ink2": "#52514e", "muted": "#898781", "grid": "#e1e0d9", "bg": "#f6f6f4"} -%}
+{%- set td = "padding:7px 8px;border-bottom:1px solid " ~ C.grid ~ ";vertical-align:top;font-size:13px;" -%}
+{%- set th = "padding:7px 8px;border-bottom:1px solid #c3c2b7;text-align:left;font-size:12px;color:" ~ C.ink2 ~ ";font-weight:600;" -%}
+{%- macro kind(k) -%}
+<span style="font-size:11px;font-weight:700;color:{{ C.good if k == 'patch' else (C.ink if k == 'minor' else C.critical) }}">{{ {"patch": "patch update", "minor": "minor upgrade", "major": "MAJOR upgrade", "none": "no fix available"}[k] }}</span>
+{%- endmacro -%}
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body style="margin:0;padding:0;background:{{ C.bg }};font-family:Segoe UI,Arial,Helvetica,sans-serif;color:{{ C.ink }}">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:{{ C.bg }}"><tr><td align="center" style="padding:20px 10px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:860px;background:#ffffff;border:1px solid {{ C.grid }};border-radius:8px">
+<tr><td style="padding:20px 22px 8px">
+  <div style="font-size:20px;font-weight:700">Vulnerability report</div>
+  <div style="font-size:12px;color:{{ C.muted }}">{{ generated }} · {{ s.apps|length }} application{{ "s" if s.apps|length != 1 }} · source: Dependency-Track</div>
+</td></tr>
+
+<tr><td style="padding:8px 22px;font-size:15px;line-height:1.5">
+  {% if s.apps|length > 1 %}Across <b>{{ s.apps|length }} applications</b>{% else %}In <b>{{ s.apps[0].name }}</b>{% endif %},
+  Dependency-Track reports <b>{{ s.critical }} critical</b> and <b>{{ s.high }} high</b> severity findings.
+  {% if s.kev_ids %}<b style="color:{{ C.critical }}">{{ s.kev_ids }} {{ "vulnerability is" if s.kev_ids == 1 else "vulnerabilities are" }} on CISA’s Known Exploited list</b> (attackers are using {{ "it" if s.kev_ids == 1 else "them" }} now).{% endif %}
+  <b>{{ s.hard_pct }}%</b> of critical/high findings need a major upgrade or have no public fix for the version in use.
+  {% if s.quick_count %}<br><b style="color:{{ C.good }}">Quick win:</b> {{ s.quick_count }} patch-level version override{{ "s" if s.quick_count != 1 }} fix <b>{{ s.quick_fixed }} findings</b>{% if s.quick_kev %} including <b>{{ s.quick_kev }} actively exploited</b>{% endif %}, without upgrading Spring Boot.{% endif %}
+</td></tr>
+
+<tr><td style="padding:8px 22px">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+  {% for n, label, color in [(s.critical, "Critical", C.critical), (s.high, "High", C.serious), (s.kev_ids, "Actively exploited", C.critical), (s.p1, "P1: fix now", C.ink), (s.hard_pct ~ "%", "Need major upgrade", C.ink)] %}
+    <td style="padding:4px"><div style="border:1px solid {{ C.grid }};border-radius:8px;padding:10px 12px">
+      <div style="font-size:24px;font-weight:700;color:{{ color }}">{{ n }}</div><div style="font-size:12px;color:{{ C.ink2 }}">{{ label }}</div></div></td>
+  {% endfor %}
+  </tr></table>
+</td></tr>
+
+<tr><td style="padding:8px 22px">
+  <div style="font-size:15px;font-weight:700;margin:6px 0">Applications</div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
+    <tr><th style="{{ th }}">Application</th><th style="{{ th }}">Status</th><th style="{{ th }}text-align:right">Crit</th><th style="{{ th }}text-align:right">High</th><th style="{{ th }}text-align:right">KEV</th><th style="{{ th }}">Main upgrades needed</th></tr>
+    {% for a in s.apps %}
+    <tr>
+      <td style="{{ td }}"><b>{% if a.link %}<a href="{{ a.link }}" style="color:{{ C.ink }};text-decoration:none">{{ a.name }}</a>{% else %}{{ a.name }}{% endif %}</b></td>
+      <td style="{{ td }}white-space:nowrap"><span style="color:{{ C[a.status[0]] }};font-weight:700">●</span> {{ a.status[1] }}</td>
+      <td style="{{ td }}text-align:right"><b>{{ a.critical }}</b></td><td style="{{ td }}text-align:right">{{ a.high }}</td>
+      <td style="{{ td }}text-align:right">{% if a.kev %}<b style="color:{{ C.critical }}">{{ a.kev }}</b>{% else %}0{% endif %}</td>
+      <td style="{{ td }}font-size:12px">
+        {% for t in a.top %}<div><b>{{ t.label }}</b>{% if t.platform %} <span style="font-size:10px;color:{{ C.ink2 }};border:1px solid #c3c2b7;border-radius:3px;padding:0 3px">PLATFORM</span>{% endif %} {{ t.from }} → {{ t.to }} · {{ t.n }} findings · {{ kind(t.kind) }}</div>{% endfor %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</td></tr>
+
+{% for a in s.apps if a.quick %}
+<tr><td style="padding:8px 22px">
+  <div style="font-size:15px;font-weight:700;margin:6px 0">Quick fixes for {{ a.name }} (no Spring Boot upgrade)</div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
+    <tr><th style="{{ th }}">Property</th><th style="{{ th }}">Set to</th><th style="{{ th }}">Risk</th><th style="{{ th }}text-align:right">Fixes</th><th style="{{ th }}text-align:right">KEV</th></tr>
+    {% for o in a.quick %}
+    <tr><td style="{{ td }}font-family:Consolas,monospace"><b>{{ o.property }}</b></td>
+      <td style="{{ td }}font-family:Consolas,monospace">{{ o.current }} → <b style="color:{{ C.good }}">{{ o.value }}</b></td>
+      <td style="{{ td }}">{% if o.effort == "patch" %}<span style="color:{{ C.good }};font-weight:700">patch: safe</span>{% else %}<span style="color:#9a6a00;font-weight:700">{{ o.effort }}: test first</span>{% endif %}</td>
+      <td style="{{ td }}text-align:right"><b>{{ o.fixedFindings }}</b> of {{ o.findings }}</td>
+      <td style="{{ td }}text-align:right">{% if o.kevFixed %}<b style="color:{{ C.critical }}">{{ o.kevFixed }}</b>{% endif %}</td></tr>
+    {% endfor %}
+  </table>
+  <pre style="font-family:Consolas,monospace;font-size:12px;background:{{ C.bg }};border:1px solid {{ C.grid }};border-radius:6px;padding:8px 10px;margin:8px 0 0;white-space:pre-wrap">&lt;properties&gt;
+{% for o in a.quick %}    &lt;{{ o.property }}&gt;{{ o.value }}&lt;/{{ o.property }}&gt;{% if o.effort != "patch" %}  &lt;!-- {{ o.effort }}: test first --&gt;{% endif %}
+{% endfor %}&lt;/properties&gt;</pre>
+</td></tr>
+{% endfor %}
+
+{% if s.p1_rows %}
+<tr><td style="padding:8px 22px">
+  <div style="font-size:15px;font-weight:700;margin:6px 0">Fix first (P1: actively exploited or EPSS ≥ 10%)</div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
+    <tr><th style="{{ th }}">App</th><th style="{{ th }}">Vulnerability</th><th style="{{ th }}text-align:right">CVSS</th><th style="{{ th }}">Affected → fix</th></tr>
+    {% for r in s.p1_rows %}
+    <tr><td style="{{ td }}">{{ r.app }}</td>
+      <td style="{{ td }}"><b>{{ r.id }}</b>{% if r.kev %} <span style="color:{{ C.critical }};font-size:11px;font-weight:700;border:1px solid {{ C.critical }};border-radius:3px;padding:0 3px">KEV</span>{% endif %}
+        <div style="font-size:12px;color:{{ C.ink2 }}">{{ r.sev|capitalize }}{% if r.epss %} · EPSS {{ (r.epss * 100)|round|int }}%{% endif %} · {{ r.title|truncate(110) }}</div></td>
+      <td style="{{ td }}text-align:right">{{ r.cvss or "–" }}</td>
+      <td style="{{ td }}font-size:12px">{% for l in r.libs %}<div>{{ l }}</div>{% endfor %}</td></tr>
+    {% endfor %}
+  </table>
+  {% if s.p1_more %}<div style="font-size:12px;color:{{ C.muted }};margin-top:4px">… and {{ s.p1_more }} more in the attached dashboard.</div>{% endif %}
+</td></tr>
+{% endif %}
+
+<tr><td style="padding:14px 22px 20px;font-size:12px;color:{{ C.ink2 }};border-top:1px solid {{ C.grid }}">
+  <b>Full report:</b> open the attached <b>{{ attachment }}</b> in a browser (interactive: filters, upgrade plan, vulnerability table, dependency trees).
+  {% if public_url %}Or open dtrg: <a href="{{ public_url }}">{{ public_url }}</a>.{% endif %}
+  {% if note %}<br>{{ note }}{% endif %}
+  <br><span style="color:{{ C.muted }}">This report contains vulnerability details of internal systems. Do not forward it outside the company.</span>
+</td></tr>
+</table>
+</td></tr></table>
+</body></html>
