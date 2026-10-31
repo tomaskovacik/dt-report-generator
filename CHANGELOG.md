@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `docker-compose.yml` pins `DTRG_DATA_DIR=/data`, so a `DTRG_DATA_DIR` in `.env` can no longer point subscriptions at the read-only image filesystem (`OSError: [Errno 30] Read-only file system: './data'`).
 - The gunicorn access log masks OAuth parameters (`code`, `state`, `session_state`, tokens), so the one-time authorization code on `/auth/callback` no longer ends up in logs.
 
 ## [3.0.0]
