@@ -22,3 +22,26 @@ forwarded_allow_ips = os.getenv("DTRG_FORWARDED_ALLOW_IPS", "127.0.0.1")
 # gunicorn's runtime control socket (gunicornc) is not used, and its default
 # path is not writable in the read-only container
 control_socket_disable = True
+
+# access log without OAuth secrets: /auth/callback carries the one-time
+# authorization code and state in its query string
+import re  # noqa: E402
+
+from gunicorn.glogging import Logger  # noqa: E402
+
+_SENSITIVE_PARAMS = re.compile(
+    r"(?i)((?:^|[?&])(?:code|state|session_state|id_token|access_token|client_secret)=)[^&\s\"]*")
+
+
+class RedactingLogger(Logger):
+    """ Gunicorn logger that masks auth parameters in the request line / query """
+
+    def atoms(self, resp, req, environ, request_time):
+        atoms = super().atoms(resp, req, environ, request_time)
+        for key in ("r", "q", "U"):
+            if isinstance(atoms.get(key), str):
+                atoms[key] = _SENSITIVE_PARAMS.sub(r"\1***", atoms[key])
+        return atoms
+
+
+logger_class = RedactingLogger
