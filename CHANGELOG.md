@@ -7,10 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.1]
+
 ### Fixed
 
 - `docker-compose.yml` pins `DTRG_DATA_DIR=/data`, so a `DTRG_DATA_DIR` in `.env` can no longer point subscriptions at the read-only image filesystem (`OSError: [Errno 30] Read-only file system: './data'`).
 - The gunicorn access log masks OAuth parameters (`code`, `state`, `session_state`, tokens), so the one-time authorization code on `/auth/callback` no longer ends up in logs.
+- Error replies no longer echo exception text (CodeQL `py/stack-trace-exposure`). Diff, dashboard and email errors are rebuilt from fixed messages. The cross-project diff error no longer names the two projects, and the empty-collection error no longer names the collection; the server log still has both.
 
 ## [3.0.0]
 
