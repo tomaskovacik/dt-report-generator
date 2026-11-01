@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Docker image base `python:3.15.0-alpine3.24` (was 3.14.7). CI tests Python 3.11 to 3.15.
+
 ## [3.0.1]
 
 ### Fixed
