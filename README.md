@@ -59,6 +59,22 @@ A DT **collection project** (for example a product with an app, a frontend and t
 
 Nested collections are expanded the same way. Children without a BOM yet are listed as skipped. **Show report** gives one combined dashboard. **ZIP** gives that dashboard plus a folder with the full report of every child. Email and schedules work on collections too, and pick up children added later. Charts show up to 7 projects in colour and group the rest as *Other*. `DTRG_COLLECTION_MAX_PROJECTS` (default 30) caps how many children one report may include.
 
+### Container images: filter the SBOM
+dtrg reads every project's CycloneDX BOM from DT (`/api/v1/bom/cyclonedx/project/{uuid}`), and DT builds that export in memory. Recent cdxgen releases inventory every file of every OS package when scanning an image (`-t docker` / `-t oci`), plus certificates and other crypto assets: a typical Java image comes out at ~5,700 components, of which ~5,200 are `file` entries without a version. DT cannot match those against vulnerabilities, but exporting such a BOM ran a DT 5.2 API server with an 8 GB heap out of memory (it restarts with `OutOfMemoryError`). The same happens when someone opens the project's dependency graph or *Export BOM* in DT itself.
+
+Generate image SBOMs with a component type filter. It keeps every package, framework and their licenses, and drops the file inventory (here: 5,850 → 425 components, identical Debian package set):
+
+```bash
+cdxgen -t docker \
+  --component-type library --component-type framework \
+  --component-type application --component-type operating-system \
+  --component-type cryptographic-asset \
+  --server-url "$DT_URL" --api-key "$DT_API_KEY" --project-id <uuid> \
+  <image>
+```
+
+`cryptographic-asset` is optional. It keeps certificates and algorithms (a few hundred entries, mostly the OS CA store), which is useful for DT policies on distrusted CAs. Leave it out if you don't need that. Pin the cdxgen version in CI so an upgrade cannot inflate the BOM again, and `docker pull` the image before scanning, since cdxgen uses a local copy of a tag if present. cdxgen's own log line "Generating BOM N components" is counted before the filter; check the component count in DT or with `jq '.components | length' bom.json`.
+
 ### Reports by email
 With mail configured (see the *Reports by email* block in `.env.example`) the start page gets:
 - an **Email** button per project, plus **Email…** / **Schedule…** for the ticked projects (one combined report);

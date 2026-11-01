@@ -7,9 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- README: generate container-image SBOMs with a cdxgen `--component-type` filter. Unfiltered cdxgen image scans list every OS package file (~5,700 components); exporting such a BOM, as dtrg and DT's own UI do, ran DT 5.2 out of an 8 GB heap.
+
 ### Fixed
 
-- **Reports no longer crash Dependency-Track on large container images.** DT builds the CycloneDX export in memory, and exporting a ~5,600-component image BOM ran DT 5.2 out of an 8 GB heap (it restarted with `OutOfMemoryError`). dtrg now skips the SBOM download for projects without findings (nothing to report) and for projects above `DTRG_SBOM_MAX_COMPONENTS` (default 3000), which are reported from the findings API alone, without dependency paths. Such projects show a note on the dashboard.
 - The dashboard status of an app without critical/high findings is "No critical or high findings" (was "Dependency updates"), and "Not analysed by DT yet" when DT has not analysed the latest BOM, so a zero is not mistaken for clean.
 
 ### Changed

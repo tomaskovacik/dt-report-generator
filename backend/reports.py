@@ -209,11 +209,10 @@ def _fetch_findings(url, headers, project):
     findings is the source of truth for the audit state shown in the DT UI.
     Findings also carry each vulnerable component's latestVersion, the only
     components whose latest version the report shows.
-    Returns ({(vuln_id, component_uuid): analysis}, {component_uuid: latest},
-    [raw findings]).
+    Returns ({(vuln_id, component_uuid): analysis}, {component_uuid: latest}).
     """
     logger.info("Fetching VEX analysis from findings API")
-    analysis_by_pair, latest_by_uuid, findings = {}, {}, []
+    analysis_by_pair, latest_by_uuid = {}, {}
     page = 1
     while True:
         # paged: without pageSize DT returns only the first 100 findings
@@ -223,7 +222,6 @@ def _fetch_findings(url, headers, project):
                            verify=verify_tls(), timeout=http_timeout())
         res.raise_for_status()
         batch = res.json() or []
-        findings += batch
         for finding in batch:
             component = finding.get("component") or {}
             vuln_id = (finding.get("vulnerability") or {}).get("vulnId")
@@ -242,38 +240,7 @@ def _fetch_findings(url, headers, project):
         page += 1
     logger.info(f"Findings API returned analysis for "
                 f"{len(analysis_by_pair)} (vuln, component) pairs")
-    return analysis_by_pair, latest_by_uuid, findings
-
-
-def sbom_max_components():
-    """ Above this many components the SBOM is not downloaded (see _load_dt_data) """
-    try:
-        return max(0, int(os.getenv("DTRG_SBOM_MAX_COMPONENTS", "3000")))
-    except ValueError:
-        return 3000
-
-
-def _sbom_from_findings(findings):
-    """ The SBOM's (vulnerabilities, dependencies, components), vulnerable part
-    only, built from the findings: same ids and refs as DT's CycloneDX export
-    (vulnerability bom-ref = vulnerability uuid, component bom-ref = uuid).
-    There is no dependency graph.
-    """
-    vulns, components = {}, {}
-    for finding in findings:
-        vuln = finding.get("vulnerability") or {}
-        comp = finding.get("component") or {}
-        if not vuln.get("uuid") or not comp.get("uuid"):
-            continue
-        entry = vulns.setdefault(vuln["uuid"], {
-            "bom-ref": vuln["uuid"], "id": vuln.get("vulnId"),
-            "ratings": [{"severity": (vuln.get("severity") or "unknown").lower()}],
-            "affects": []})
-        entry["affects"].append({"ref": comp["uuid"]})
-        components[comp["uuid"]] = {"uuid": comp["uuid"], "name": comp.get("name"),
-                                    "version": comp.get("version"),
-                                    "group": comp.get("group") or ""}
-    return list(vulns.values()), {}, list(components.values())
+    return analysis_by_pair, latest_by_uuid
 
 
 def _fetch_components(bom_components, direct_uuids, deps_deps, latest_by_uuid):
@@ -720,23 +687,8 @@ def _load_dt_data(url, headers, project):
     """
     project_info, project_name_str, direct_uuids = _fetch_project_info(
         url, headers, project)
-    analysis_by_pair, latest_by_uuid, findings = _fetch_findings(url, headers, project)
-    # The SBOM's vulnerabilities are the findings; it adds the dependency
-    # graph. DT builds the whole export in memory, and a 5,600-component image
-    # BOM took it past an 8 GB heap, so large projects and projects without
-    # findings are reported from the findings alone.
-    total = project_info.get("componentsCount") or 0
-    if not findings:
-        logger.info("No findings: SBOM download skipped")
-        vulnerabilities, deps_deps, bom_components = [], {}, []
-    elif total > sbom_max_components():
-        logger.info(f"{total} components (> DTRG_SBOM_MAX_COMPONENTS): "
-                    "SBOM download skipped, no dependency graph")
-        vulnerabilities, deps_deps, bom_components = _sbom_from_findings(findings)
-        project_info["graphSkipped"] = (f"Large project ({total:,} components): "
-                                        "dependency paths not loaded")
-    else:
-        vulnerabilities, deps_deps, bom_components = _fetch_sbom(url, headers, project)
+    vulnerabilities, deps_deps, bom_components = _fetch_sbom(url, headers, project)
+    analysis_by_pair, latest_by_uuid = _fetch_findings(url, headers, project)
     components = _fetch_components(bom_components, direct_uuids, deps_deps, latest_by_uuid)
     return {
         "project_info": project_info,

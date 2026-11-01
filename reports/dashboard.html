@@ -324,7 +324,7 @@ function drawExec() {
   }).sort((a, b) => b.kev - a.kev || b.p1 - a.p1 || b.crit - a.crit);
   $("appTable").innerHTML = `<table><thead><tr><th>Application</th><th>Status</th><th class="num">Critical</th><th class="num">High</th><th class="num">Exploited (KEV)</th><th class="num">P1</th><th class="num">Major upgrade or no fix</th><th>Main upgrades needed (current → target)</th></tr></thead><tbody>` +
     rows.map(r => `<tr class="click" data-app="${esc(r.p.name)}" title="Filter tables below to this app">
-      <td>${appCell(r.p)} <a href="${esc(r.p.dtLink)}" target="_blank" rel="noopener" class="small" onclick="event.stopPropagation()">DT ↗</a>${r.p.note ? `<div class="small">${esc(r.p.note)}</div>` : ""}</td>
+      <td>${appCell(r.p)} <a href="${esc(r.p.dtLink)}" target="_blank" rel="noopener" class="small" onclick="event.stopPropagation()">DT ↗</a></td>
       <td><span class="status"><span class="ic" style="background:${r.status[0]}">${r.status[1]}</span>${r.status[2]}</span></td>
       <td class="num"><b>${r.crit}</b></td><td class="num">${r.high}</td>
       <td class="num">${r.kev ? `<b style="color:var(--critical)">${r.kev}</b>` : "0"}</td>

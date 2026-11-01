@@ -594,13 +594,10 @@ def _dashboard_project(url, headers, project):
     components = data["components"]
     version = data["info"].get("version")
     label = " ".join(x for x in (data["name"], None if version == "no version" else version) if x) or project
-    if data["info"].get("graphSkipped"):
-        components = None  # vulnerable components only, no dependency graph
     graph = get_graph(components) if components else None
     tree = dashboard.graph_tree(render_template("graph.html", graph=graph)) if graph else None
     return dashboard.build_project(url, headers, project, label, tree, graph=components,
-                                   analysis_pending=data["info"].get("analysisPending"),
-                                   note=data["info"].get("graphSkipped"))
+                                   analysis_pending=data["info"].get("analysisPending"))
 
 def _build_dashboard_data(config, projects, output_dir):
     """ -> ({"projects": [...], "collections": [...]}, None) or (None, error).

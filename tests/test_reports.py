@@ -316,7 +316,7 @@ def test_findings_are_paged_with_bounded_page_size():
         return res
 
     with patch.object(reports.requests, "get", side_effect=get):
-        analysis, latest, _ = reports._fetch_findings("https://dt/api/v1/", {}, "p")
+        analysis, latest = reports._fetch_findings("https://dt/api/v1/", {}, "p")
     assert [c["pageNumber"] for c in calls] == [1, 2]
     assert all(c["pageSize"] == size and c["suppressed"] == "true" for c in calls)
     assert len(analysis) == size + 1  # nothing lost past DT's default of 100
@@ -324,8 +324,7 @@ def test_findings_are_paged_with_bounded_page_size():
     assert latest[f"c{size}"] == f"{size}.0"
 
 
-# A project without findings never needs its SBOM: exporting a 5,653-component
-# image BOM ran DT out of heap, and the SBOM's vulnerabilities are the findings
+# zero findings before DT analysed the latest BOM mean "unknown", not "clean"
 
 def _payloads_clean(project_extra=None):
     return [
@@ -337,17 +336,6 @@ def _payloads_clean(project_extra=None):
     ]
 
 
-def test_no_findings_skips_sbom_download(monkeypatch):
-    monkeypatch.delenv("DTRG_INCLUDE_SUPPRESSED", raising=False)
-    get = MagicMock(side_effect=_fake_dt_get(_payloads_clean(
-        {"lastBomImport": 1_000, "lastVulnerabilityAnalysis": 2_000})))
-    with tempfile.TemporaryDirectory() as td, patch.object(reports.requests, "get", get):
-        report, components = reports.create_report(_config(), td)
-    assert isinstance(report, str)
-    assert components == {}
-    assert not any("bom/cyclonedx" in c.args[0] for c in get.call_args_list)
-
-
 def test_analysis_pending_when_bom_newer_than_analysis(monkeypatch):
     for extra, pending in (({"lastBomImport": 2_000, "lastVulnerabilityAnalysis": 1_000}, True),
                            ({"lastBomImport": 2_000}, True),
@@ -357,29 +345,3 @@ def test_analysis_pending_when_bom_newer_than_analysis(monkeypatch):
             data = reports._load_project("https://example.com/api/v1/", {}, "p")
         assert data["info"]["analysisPending"] is pending, extra
 
-
-def test_large_project_is_reported_from_findings_without_sbom(monkeypatch):
-    monkeypatch.delenv("DTRG_INCLUDE_SUPPRESSED", raising=False)
-    monkeypatch.setenv("DTRG_SBOM_MAX_COMPONENTS", "100")
-    findings = [
-        {"component": {"uuid": "c1", "name": "openssl", "version": "3.0.1", "group": ""},
-         "vulnerability": {"uuid": "v1", "vulnId": "CVE-2024-0001", "severity": "CRITICAL"},
-         "analysis": {}},
-        {"component": {"uuid": "c2", "name": "zlib", "version": "1.2", "group": ""},
-         "vulnerability": {"uuid": "v1", "vulnId": "CVE-2024-0001", "severity": "CRITICAL"},
-         "analysis": {}},
-        {"component": {"uuid": "c2", "name": "zlib", "version": "1.2", "group": ""},
-         "vulnerability": {"uuid": "v2", "vulnId": "CVE-2024-0002", "severity": "HIGH"},
-         "analysis": {"state": "FALSE_POSITIVE", "isSuppressed": True}},
-    ]
-    payloads = [p for p in _payloads_clean({"lastBomImport": 1, "lastVulnerabilityAnalysis": 2})
-                if p[0] != "finding/project"]
-    payloads.insert(1, ("finding/project", findings))
-    get = MagicMock(side_effect=_fake_dt_get(payloads))
-    with patch.object(reports.requests, "get", get):
-        data = reports._load_project("https://example.com/api/v1/", {}, "p")
-    assert not any("bom/cyclonedx" in c.args[0] for c in get.call_args_list)
-    assert set(data["components"]) == {"c1", "c2"}
-    assert _live_ids(data["components"]) == ["CVE-2024-0001", "CVE-2024-0001"]
-    assert data["components"]["c1"]["severity"].upper() == "CRITICAL"
-    assert "5,653 components" in data["info"]["graphSkipped"]
