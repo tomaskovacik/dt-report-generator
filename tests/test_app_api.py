@@ -22,7 +22,7 @@ def test_index_renders_project_list(client, monkeypatch):
     response = client.get("/")
     assert response.status_code == 200
     assert b'id="rows"' in response.data
-    assert b"https://dt.example.com" in response.data
+    assert b'href="https://dt.example.com"' in response.data
     assert b'name="token"' not in response.data
 
 

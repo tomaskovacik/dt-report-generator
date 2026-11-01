@@ -948,7 +948,7 @@ def ui_send_email():
     try:
         send_report_email(projects, body.get("recipients") or [])
     except mailer.MailError as e:
-        return _json_error(str(e))
+        return _json_error(e.reply)
     return jsonify(ok=True)
 
 def _sub_view(sub):
@@ -1006,7 +1006,7 @@ def ui_create_subscription():
     try:
         recipients = mailer.check_recipients(body.get("recipients") or [])
     except mailer.MailError as e:
-        return _json_error(str(e))
+        return _json_error(e.reply)
     frequency = body.get("frequency")
     try:
         hour = int(body.get("hour", 7))
@@ -1063,7 +1063,7 @@ def ui_run_subscription(sub_id):
     try:
         run_subscription(sub)
     except mailer.MailError as e:
-        return _json_error(str(e))
+        return _json_error(e.reply)
     return jsonify(ok=True)
 
 def run_subscription(sub):
@@ -1073,7 +1073,7 @@ def run_subscription(sub):
                           note=f"Scheduled report ({sub['frequency']})"
                                + ("" if sub["owner"] == "shared" else f" set up by {sub['owner_name'] or sub['owner']}") + ".")
     except mailer.MailError as e:
-        store.record_run(sub["id"], f"failed: {e}")
+        store.record_run(sub["id"], f"failed: {e.reply}")
         raise
     except Exception as e:
         store.record_run(sub["id"], "failed: internal error")

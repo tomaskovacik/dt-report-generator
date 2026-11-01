@@ -30,7 +30,11 @@ _EMAIL_RE = re.compile(r"^[^@\s,;<>\"']+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 
 
 class MailError(Exception):
-    """ Safe to show to the user """
+    """ A mail problem; .reply is the message for the user (no internal detail) """
+
+    def __init__(self, reply):
+        super().__init__(reply)
+        self.reply = reply
 
 
 def backend() -> str:

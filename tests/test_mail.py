@@ -171,7 +171,7 @@ def test_email_body_renders_without_scripts():
                                           generated="now", public_url="https://dtrg.example.com")
     assert "<script" not in html
     assert "tomcat.version" in html and "9.0.121" in html and "CVE-2025-24813" in html
-    assert "https://dtrg.example.com" in html
+    assert 'href="https://dtrg.example.com"' in html
 
 
 # routes
