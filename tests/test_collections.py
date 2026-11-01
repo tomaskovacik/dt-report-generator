@@ -105,7 +105,7 @@ def test_collection_without_bom_children_is_a_clear_error():
     with patch.object(app_module, "_resolve_params", return_value=(URL, {}, "empty")), \
          patch.object(dt_collections.requests, "get", side_effect=_fake_get):
         data, err = app_module._build_dashboard_data({}, ["empty"], "/tmp")
-    assert data is None and app_module._dashboard_user_error(err) == "No projects with a BOM in CSL"
+    assert data is None and app_module._dashboard_user_error(err) == "No projects with a BOM in the selected collection"
 
 def test_collection_cap(monkeypatch):
     monkeypatch.setenv("DTRG_COLLECTION_MAX_PROJECTS", "1")

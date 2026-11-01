@@ -320,7 +320,7 @@ def test_api_diff_surfaces_same_project_error(client):
 
 
 def test_api_diff_surfaces_cross_project_error(client):
-    """ Cross-project diff attempt -> verbatim error in API response """
+    """ Cross-project diff attempt -> fixed message, not the exception text """
     err = ValueError(f"{app_module.DIFF_ERROR_CROSS_PROJECT_PREFIX} "
                      f"(got 'foo' vs 'bar')")
     with patch.object(app_module, "create_diff_report",
@@ -332,8 +332,7 @@ def test_api_diff_surfaces_cross_project_error(client):
                                            "projectA": "ua", "projectB": "ub"}),
                           content_type="application/json")
     assert res.status_code == 400
-    assert "foo" in res.get_json()["error"]
-    assert "bar" in res.get_json()["error"]
+    assert res.get_json()["error"] == app_module.DIFF_ERROR_CROSS_PROJECT_PREFIX
 
 
 def test_api_diff_hides_unrelated_errors(client):

@@ -288,18 +288,17 @@ def _diff_user_error(err):
 
     create_diff_report raises ValueError with one of two known prefixes
     when the operator picks two of the same project or two unrelated
-    projects. Those messages are dtrg-controlled strings (no external
-    data interpolation beyond DT project names) and are explicitly
-    designed for the end user to read. Everything else falls back to
-    the generic message so we do not leak internal exception detail.
+    projects. The reply is the matching constant, never the exception
+    text itself, so no exception detail can reach the client.
+    Everything else falls back to the generic message.
     """
     if not isinstance(err, Exception):
         return None
     msg = str(err)
     if msg == DIFF_ERROR_SAME_PROJECT:
-        return msg
+        return DIFF_ERROR_SAME_PROJECT
     if msg.startswith(DIFF_ERROR_CROSS_PROJECT_PREFIX):
-        return msg
+        return DIFF_ERROR_CROSS_PROJECT_PREFIX
     return None
 
 def _project_label(output_dir, fallback):
@@ -626,10 +625,20 @@ def _build_dashboard_data(config, projects, output_dir):
     return {"projects": collected, "collections": collections}, None
 
 def _dashboard_user_error(err):
-    """ Input errors that are safe and useful to show to the user """
+    """ Input errors that are safe and useful to show to the user.
+
+    The reply is rebuilt from constants and config, never copied from the
+    exception, so no exception detail can reach the client.
+    """
     msg = str(err) if isinstance(err, ValueError) else ""
-    if msg == "Select at least one project" or msg.startswith(("At most ", "No projects with a BOM")):
-        return msg
+    if msg == "Select at least one project":
+        return "Select at least one project"
+    if msg.startswith("No projects with a BOM"):
+        return "No projects with a BOM in the selected collection"
+    if msg.startswith("At most ") and msg.endswith(" selected)"):
+        return f"At most {dt_collections.max_projects()} projects per dashboard (DTRG_COLLECTION_MAX_PROJECTS)"
+    if msg.startswith("At most "):
+        return f"At most {dashboard_max_projects()} projects per dashboard"
     return None
 
 def _send_dashboard(path, name):
