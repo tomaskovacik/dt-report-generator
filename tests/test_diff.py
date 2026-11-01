@@ -134,7 +134,10 @@ def _payloads_for(version, vuln_ids, last_bom_ms=0):
     """ Mock fixture: a project at <version> with the given vulns on libA """
     return [
         (lambda u: u.endswith("/project"), []),
-        ("finding/project", []),
+        ("finding/project", [
+            {"component": {"uuid": "c1"}, "vulnerability": {"vulnId": v}, "analysis": {}}
+            for v in vuln_ids
+        ]),
         ("bom/cyclonedx", {
             "vulnerabilities": [
                 {"bom-ref": v, "id": v, "ratings": [{"severity": "high"}],
@@ -153,6 +156,16 @@ def _payloads_for(version, vuln_ids, last_bom_ms=0):
     ]
 
 
+def _by_project(fixtures):
+    """ requests.get side effect: route each DT call to the fixture of the
+    project uuid in its URL (the token probe has none and takes the first) """
+    def dispatch(url, headers=None, verify=None, timeout=None, params=None):
+        fixture = next((f for uuid, f in fixtures.items() if uuid in url),
+                       next(iter(fixtures.values())))
+        return fixture(url, headers=headers, verify=verify, timeout=timeout, params=params)
+    return dispatch
+
+
 def _config(project_uuid):
     return {
         "url": ["https://example.com"],
@@ -169,14 +182,8 @@ def test_create_diff_report_writes_xlsx_and_summary(monkeypatch):
                                             last_bom_ms=1_000))
     fixture_b = _fake_dt_get(_payloads_for("1.1", ["CVE-2024-0001"],
                                             last_bom_ms=2_000))
-    call_state = {"is_b": False, "switch_after": 4}  # 4 calls for project A
-    counter = {"n": 0}
-
-    def dispatch(url, headers=None, verify=None, timeout=None, params=None):
-        counter["n"] += 1
-        if counter["n"] <= call_state["switch_after"]:
-            return fixture_a(url, headers=headers, verify=verify, timeout=timeout)
-        return fixture_b(url, headers=headers, verify=verify, timeout=timeout)
+    dispatch = _by_project({"00000000-0000-0000-0000-000000000001": fixture_a,
+                            "00000000-0000-0000-0000-000000000002": fixture_b})
 
     with tempfile.TemporaryDirectory() as td, \
          patch.object(reports.requests, "get", side_effect=dispatch):
@@ -275,13 +282,8 @@ def test_create_diff_report_rejects_cross_project(monkeypatch):
         ("/project/", {"name": "appB", "version": "1.0", "metrics": {},
                        "directDependencies": "[]", "lastBomImport": 2000}),
     ])
-    counter = {"n": 0}
-
-    def dispatch(url, headers=None, verify=None, timeout=None, params=None):
-        counter["n"] += 1
-        if counter["n"] == 1 or 3 <= counter["n"] <= 5:  # check A, check B, A: project, sbom, findings
-            return fa(url)
-        return fb(url)
+    dispatch = _by_project({"00000000-0000-0000-0000-00000000000a": fa,
+                            "00000000-0000-0000-0000-00000000000b": fb})
 
     with tempfile.TemporaryDirectory() as td, \
          patch.object(reports.requests, "get", side_effect=dispatch):
@@ -305,13 +307,8 @@ def test_create_diff_report_swaps_so_newer_is_b(monkeypatch):
         "1.1", ["CVE-2024-0001"], last_bom_ms=2_000))
     fixture_b_older = _fake_dt_get(_payloads_for(
         "1.0", ["CVE-2024-0001", "CVE-2024-0002"], last_bom_ms=1_000))
-    counter = {"n": 0}
-
-    def dispatch(url, headers=None, verify=None, timeout=None, params=None):
-        counter["n"] += 1
-        if counter["n"] <= 4:
-            return fixture_a_newer(url, headers=headers, verify=verify, timeout=timeout)
-        return fixture_b_older(url, headers=headers, verify=verify, timeout=timeout)
+    dispatch = _by_project({"00000000-0000-0000-0000-00000000000a": fixture_a_newer,
+                            "00000000-0000-0000-0000-00000000000b": fixture_b_older})
 
     with tempfile.TemporaryDirectory() as td, \
          patch.object(reports.requests, "get", side_effect=dispatch):

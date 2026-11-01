@@ -564,14 +564,17 @@ def graph_tree(graph_html):
     return match.group(1) if match else None
 
 
-def build_project(url, headers, project, name, tree=None, direct=None, graph=None):
+def build_project(url, headers, project, name, tree=None, direct=None, graph=None,
+                  analysis_pending=False, note=None):
     """ Collect one project's dashboard data.
 
     url/headers come from param_validators (url ends in /api/v1/), `tree` is
     graph_tree() output, `direct` maps (name, version) -> is direct dependency,
     `graph` is create_report's component dict (uuid -> name, group, version,
     dependencies, is_direct_dependency) used for "pulled in by" paths and
-    the Spring Boot / library family upgrade targets.
+    the Spring Boot / library family upgrade targets. `analysis_pending`:
+    DT has not analysed the latest BOM yet. `note`: shown next to the app
+    (e.g. why dependency paths are missing).
     """
     logger.info(f"Collecting dashboard data for {name}")
     raw = _findings(url, headers, project)
@@ -644,7 +647,8 @@ def build_project(url, headers, project, name, tree=None, direct=None, graph=Non
     return {"name": name, "uuid": project,
             "dtLink": f"{url.split('/api/v1/')[0]}/projects/{project}",
             "counts": counts, "components": comps, "vulns": vulns, "tree": tree,
-            "platforms": platforms}
+            "platforms": platforms, "analysisPending": bool(analysis_pending),
+            "note": note}
 
 
 def direct_map(summary):
