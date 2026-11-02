@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.0]
+
 ### Documentation
 
 - README: generate container-image SBOMs with a cdxgen `--component-type` filter. Unfiltered cdxgen image scans list every OS package file (~5,700 components); exporting such a BOM, as dtrg and DT's own UI do, ran DT 5.2 out of an 8 GB heap.
