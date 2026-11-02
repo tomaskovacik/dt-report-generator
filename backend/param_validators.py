@@ -74,7 +74,8 @@ if not verify_tls():
 def check_format_url(url: str) -> str:
     """ Check existence and format url to <protocol://domain/api/v1/> """
     logger.debug(f"Checking URL format: {url}")
-    if not validators.url(url):
+    # validators.url() also accepts ftp:// and (since 0.36) file:// URLs
+    if urlparse(url or "").scheme.lower() not in ("http", "https") or not validators.url(url):
         logger.error(f"Invalid URL provided: {url}")
         raise ValueError("URL not valid")
     # SSRF allowlist: when DTRG_ALLOWED_HOSTS is set, the URL host must

@@ -77,6 +77,15 @@ def test_check_format_url_rejects_empty():
     with pytest.raises(ValueError, match="URL not valid"):
         pv.check_format_url("")
 
+@pytest.mark.parametrize("url", ["file:///etc/passwd", "ftp://dt.example.com/", "gopher://dt.example.com"])
+def test_check_format_url_rejects_non_http_schemes(url):
+    with pytest.raises(ValueError, match="URL not valid"):
+        pv.check_format_url(url)
+
+def test_check_format_url_accepts_http_and_https():
+    assert pv.check_format_url("HTTP://10.0.0.5:8081") == "HTTP://10.0.0.5:8081/api/v1/"
+    assert pv.check_format_url("https://dt.example.com:8443") == "https://dt.example.com:8443/api/v1/"
+
 
 # DTRG_ALLOWED_HOSTS
 

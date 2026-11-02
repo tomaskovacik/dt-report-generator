@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Docker image base `python:3.15.0-alpine3.24` (was 3.14.7). CI tests Python 3.11 to 3.15.
+- Dependencies: validators 0.36.0, Bootstrap-Flask 2.6.0 (Bootstrap 5.3.8); GitHub Actions setup-python 7.1.0, docker/build-push-action 7.4.0, setup-buildx-action 4.4.1, setup-qemu-action 4.4.0.
+
+### Security
+
+- The Dependency-Track URL must be `http://` or `https://`. validators 0.36 started accepting `file://` URLs (and `ftp://` always passed); requests refused both, but the check no longer relies on that.
 
 ## [3.0.1]
 
