@@ -56,6 +56,8 @@
             Signed in as <b>{{ sso_user.name or sso_user.username }}</b> &middot;
             <a href="{{ url_for('auth.logout') }}">Sign out</a>
         </div>
+        {% elif key_signed_in %}
+        <div class="meta"><a href="{{ url_for('keylogin.logout') }}">Sign out</a></div>
         {% endif %}
     </div>
 

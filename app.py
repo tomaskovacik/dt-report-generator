@@ -16,7 +16,6 @@ import hmac
 import json
 import logging
 import re
-import secrets
 import shutil
 import tempfile
 import zipfile
@@ -39,7 +38,7 @@ from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.utils import secure_filename
 
-from backend import auth, dashboard, dt_collections, mail_summary, mailer, scheduler, store
+from backend import auth, dashboard, dt_collections, keys, mail_summary, mailer, scheduler, store
 from backend.dependency_graph import get_graph
 from backend.param_validators import projects_page_size
 from backend.projects import get_projects
@@ -60,10 +59,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-__version__ = "3.1.0"
+__version__ = "4.0.0"
+
+# unset secrets are generated once and stored; see backend/keys.py
+keys.ensure_secrets()
 
 app = Flask(__name__)
-app.config["SECRET_KEY"] = os.getenv("DTRG_SECRET_KEY") or secrets.token_hex(16)
+app.config["SECRET_KEY"] = os.environ["DTRG_SECRET_KEY"]
 # HTTPS-only session cookie. Opt-in via env to keep local HTTP dev working
 # (when set, the browser refuses to send the cookie over http:// and CSRF
 # breaks during a local form submit).
@@ -76,26 +78,29 @@ app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 bootstrap = Bootstrap5(app)
 csrf = CSRFProtect(app)
 
-# Rate limit on /api/v1/* only. Empty DTRG_API_RATE_LIMIT disables.
-# Form routes / probes / Swagger are not limited.
+# Rate limits on /api/v1/* and on the routes that send mail now. Empty
+# DTRG_API_RATE_LIMIT / DTRG_MAIL_RATE_LIMIT disables. Other form routes,
+# probes and Swagger are not limited.
 _API_RATE_LIMIT = os.getenv("DTRG_API_RATE_LIMIT", "60/minute").strip()
+_MAIL_RATE_LIMIT = os.getenv("DTRG_MAIL_RATE_LIMIT", "10/minute").strip()
 limiter = Limiter(get_remote_address, app=app, default_limits=[],
                   storage_uri="memory://")
 
 
 @app.errorhandler(429)
 def _ratelimit_json(err):
-    """ Return JSON for /api/v1/* clients (default Flask-Limiter is HTML) """
-    if request.path.startswith("/api/v1/"):
+    """ Return JSON for /api/v1/* and /ui/* clients (default Flask-Limiter is HTML) """
+    if request.path.startswith(("/api/v1/", "/ui/")):
         return jsonify(error="rate_limited", description=str(err.description)), 429
     return err
 
 
-def _api_limit():
+def _api_limit(limit=None):
     """ Decorator that applies the configured rate limit, or no-op when empty """
-    if not _API_RATE_LIMIT:
+    limit = _API_RATE_LIMIT if limit is None else limit
+    if not limit:
         return lambda view: view
-    return limiter.limit(_API_RATE_LIMIT)
+    return limiter.limit(limit)
 
 
 @app.after_request
@@ -129,7 +134,8 @@ swagger = Swagger(app, config={
         "title": "dt-report-generator API",
         "description": "Generate Dependency-Track reports from a browser form "
                        "or from CI. The /api/v1/* endpoints are JSON, "
-                       "CSRF-exempt, and gated by DTRG_API_KEY when set.",
+                       "CSRF-exempt, and gated by DTRG_API_KEY (generated and "
+                       "stored on the first start when not set).",
         "version": "1.0",
     },
     "securityDefinitions": {
@@ -137,7 +143,7 @@ swagger = Swagger(app, config={
             "type": "apiKey",
             "in": "header",
             "name": "X-DTRG-Key",
-            "description": "DTRG_API_KEY value. Required only if the env var is set.",
+            "description": "DTRG_API_KEY value. Not needed only when DTRG_API_KEY is set to \"\".",
         },
         "Bearer": {
             "type": "apiKey",
@@ -148,8 +154,8 @@ swagger = Swagger(app, config={
     },
 })
 
-# Optional Microsoft Entra ID / OIDC login for the browser UI (DTRG_OIDC_*)
-auth.init_app(app)
+# Browser login: Microsoft Entra ID / OIDC (DTRG_OIDC_*) or the access key
+auth.init_app(app, login_limit=_api_limit("10/minute"))
 
 
 def _presented_api_key():
@@ -931,6 +937,7 @@ def ui_mail_config():
                    maxProjects=dashboard_max_projects())
 
 @app.route("/ui/email", methods=["POST"])
+@_api_limit(_MAIL_RATE_LIMIT)
 def ui_send_email():
     """Email a report now: {"projects": [uuid, ...], "recipients": [email, ...]}.
     ---
@@ -1045,6 +1052,7 @@ def ui_delete_subscription(sub_id):
     return jsonify(ok=True)
 
 @app.route("/ui/subscriptions/<int:sub_id>/run", methods=["POST"])
+@_api_limit(_MAIL_RATE_LIMIT)
 def ui_run_subscription(sub_id):
     """Send one of your subscriptions right now (the schedule is unchanged).
     ---

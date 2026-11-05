@@ -175,3 +175,13 @@ def test_compute_graph_levels_skips_missing_uuid():
     }
     compute_graph_levels(components)  # must not crash
     assert components["a"]["graph_level"] == 1
+
+
+def test_get_graph_escapes_sbom_strings():
+    """ Component data is from the SBOM; the tree is embedded as HTML """
+    evil = _component("<img src=x onerror=alert(1)>", is_direct=True, vulns=["v"], severity="HIGH")
+    evil["version"] = '"><script>x</script>'
+    out = get_graph({"a": evil}, depth=3)
+    assert "<img" not in out and "<script>" not in out
+    assert "&lt;img src=x onerror=alert(1)&gt;@&quot;&gt;&lt;script&gt;" in out
+    assert '<span class="vuln vuln-high">[HIGH vuln]' in out

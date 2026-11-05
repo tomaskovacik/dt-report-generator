@@ -17,6 +17,8 @@ GitHub / registry calls entirely (air-gapped installs); DTRG_GITHUB_TOKEN
 raises the GitHub API rate limit from 60 to 5000 requests per hour.
 """
 
+import base64
+import hashlib
 import json
 import logging
 import os
@@ -655,6 +657,19 @@ def direct_map(summary):
             for c in (summary or {}).get("components") or []}
 
 
+# Only the page's own script may run (pinned by hash), and it cannot send
+# anything anywhere: markup injected through DT data stays inert, in the
+# browser view and in a downloaded or emailed copy alike.
+_CSP = ("default-src 'none'; script-src '{script}'; style-src 'unsafe-inline'; img-src data:; "
+        "connect-src 'none'; form-action 'none'; base-uri 'none'")
+
+
+def _csp_meta(page):
+    script = re.search(r"<script>(.*?)</script>", page, re.S).group(1)
+    digest = base64.b64encode(hashlib.sha256(script.encode("utf-8")).digest()).decode()
+    return f'<meta http-equiv="Content-Security-Policy" content="{_CSP.format(script="sha256-" + digest)}">'
+
+
 def render(projects, path, collections=None):
     """ Write the dashboard page for already collected projects to `path` """
     with open(DASHBOARD_TEMPLATE, encoding="utf-8") as f:
@@ -663,6 +678,7 @@ def render(projects, path, collections=None):
             "collections": collections or []}
     # "</" escaped so project data can never close the inline <script>
     page = page.replace("/*__DATA__*/null", json.dumps(data).replace("</", "<\\/"))
+    page = page.replace("<!--__CSP__-->", _csp_meta(page), 1)
     with open(path, "w", encoding="utf-8") as f:
         f.write(page)
     return path

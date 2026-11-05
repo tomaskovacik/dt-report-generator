@@ -270,3 +270,14 @@ def test_scheduler_tick_runs_due_and_survives_failures():
     with patch.object(store, "_now", return_value=later):
         assert scheduler.tick(app_module.app, job) == 2
     assert sorted(calls) == sorted([s1["id"], s2["id"]])
+
+def test_send_now_is_rate_limited(client):
+    app_module.limiter.reset()
+    try:
+        with patch.object(app_module, "send_report_email"):
+            codes = [client.post("/ui/email", json={"projects": [UUID_A], "recipients": ["a@example.com"]}).status_code
+                     for _ in range(11)]
+        assert codes[:10] == [200] * 10
+        assert codes[10] == 429
+    finally:
+        app_module.limiter.reset()

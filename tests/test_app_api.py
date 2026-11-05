@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import app as app_module
+from backend import auth
 
 
 @pytest.fixture
@@ -13,6 +14,9 @@ def client(monkeypatch):
     monkeypatch.setenv("DTRG_API_KEY", "secret")
     app_module.app.config.update(TESTING=True)
     with app_module.app.test_client() as c:
+        # the browser routes need the access-key sign-in; /api/v1/* still checks the header
+        with c.session_transaction() as s:
+            s["dtrg_key"] = auth._key_fingerprint("secret")
         yield c
 
 

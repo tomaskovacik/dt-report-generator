@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.0]
+
+### Breaking
+
+- **No unprotected access by default.** When `DTRG_API_KEY` is not set, dtrg generates a random one on the first start (so does `DTRG_SECRET_KEY`), stores it in `DTRG_DATA_DIR/dtrg.sqlite3` and logs it once; later starts reuse it. `python -m backend.keys show` / `reset` print or forget the stored keys. `/api/v1/*` callers must send the key, and without SSO the browser UI shows a sign-in form that asks for it. A key in `.env` always wins. `DTRG_API_KEY=` (empty) is the explicit opt-out and restores the old open behaviour.
+
+### Security
+
+- Stored XSS through component names: the dependency tree (graph.html and the dashboard's dependency trees) embedded SBOM names and versions as unescaped HTML. A BOM with a component named like `<img src=x onerror=...>` ran script in dtrg's origin for anyone who opened the report. Names, versions and severities are escaped now.
+- The dashboard carries a Content-Security-Policy: only its own script runs (pinned by SHA-256 hash), and it cannot send requests or submit forms (`connect-src 'none'`, `form-action 'none'`). This also covers a downloaded or emailed copy. graph.html runs no script at all.
+- Sending a report now (`/ui/email`, `/ui/subscriptions/<id>/run`) is rate limited per IP: `DTRG_MAIL_RATE_LIMIT`, default `10/minute`.
+
 ## [3.1.0]
 
 ### Documentation

@@ -375,3 +375,19 @@ def test_combined_dashboard_user_errors(client, dt_env):
     res = client.get("/dashboard")
     assert res.status_code == 400 and b"Select at least one project" in res.data
     assert client.get("/dashboard?projects=nope").status_code == 400
+
+def test_render_pins_its_script_with_a_csp_hash():
+    import base64
+    import hashlib
+    import re
+    project = {"name": "a", "uuid": "u", "dtLink": "", "counts": {}, "components": {},
+               "vulns": [], "tree": "<img src=x onerror=alert(1)>"}
+    with tempfile.TemporaryDirectory() as d:
+        html = open(dashboard.render([project], os.path.join(d, "dashboard.html")), encoding="utf-8").read()
+    csp = re.search(r'<meta http-equiv="Content-Security-Policy" content="([^"]+)">', html).group(1)
+    script = re.search(r"<script>(.*?)</script>", html, re.S).group(1)
+    digest = base64.b64encode(hashlib.sha256(script.encode("utf-8")).digest()).decode()
+    assert f"script-src 'sha256-{digest}'" in csp
+    assert "unsafe-inline" not in csp.split("script-src")[1].split(";")[0]
+    assert "connect-src 'none'" in csp and "form-action 'none'" in csp
+    assert ' on' + 'click="' not in html.split("<script>")[0]

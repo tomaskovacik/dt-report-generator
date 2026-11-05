@@ -2,6 +2,7 @@
 
 import copy
 import logging
+from html import escape
 
 from anytree import Node, RenderTree
 
@@ -94,15 +95,14 @@ def get_graph(components, depth=None):
     def update_tree(tree, dependencies):
         """ Recursively add dependencies to the tree """
         for dependency in dependencies:
+            # names and versions come from the SBOM: escape them, the tree is HTML
+            label = f'{escape(str(dependency.get("name")))}@{escape(str(dependency.get("version")))}'
             if dependency.get("vulnerabilities"):
-                severity = dependency.get("severity")
-                node_name = (f'<span class="vuln vuln-{severity.lower()}">\
-[{severity} vuln] \
-{dependency.get("name")}@{dependency.get("version")} (last: {dependency.get("last_version")})\
-</span>')
+                severity = escape(str(dependency.get("severity")))
+                node_name = (f'<span class="vuln vuln-{severity.lower()}">[{severity} vuln] '
+                             f'{label} (last: {escape(str(dependency.get("last_version")))})</span>')
             else:
-                node_name = f'<span class="pkg">\
-{dependency.get("name")}@{dependency.get("version")}</span>'
+                node_name = f'<span class="pkg">{label}</span>'
 
             d = Node(node_name, parent=tree)
 

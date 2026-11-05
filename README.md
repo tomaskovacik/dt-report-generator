@@ -23,8 +23,9 @@ docker run --name dtrg -d --restart unless-stopped -p 5000:5000 --env-file .env 
 ```
 Or with Docker Compose (uses the published image, hardened: read-only root filesystem, no capabilities):
 ```
-cp .env.example .env    # fill in DT_URL / DT_TOKEN / DTRG_SECRET_KEY
+cp .env.example .env    # fill in DT_URL / DT_TOKEN / DTRG_SECRET_KEY / DTRG_API_KEY
 docker compose up -d    # DTRG_TAG=management-dashboard to follow the branch, --build to build locally
+docker compose exec dtrg python -m backend.keys show    # the generated keys, if you left them unset
 ```
 Image tags (built by `.github/workflows/publish.yml` after pytest; vulnerability scanning is done by GitHub code scanning (CodeQL), Dependabot and secret scanning): `:<branch>` and `:sha-<commit>` on every push to `main` / `management-dashboard`; `:<version>` and `:latest` for a version tag (`git tag v.2.3.0 && git push --tags`), which also creates a GitHub release. In `.env` for the container use `DTRG_HOST=0.0.0.0`.
 ### Usage
@@ -82,8 +83,23 @@ With mail configured (see the *Reports by email* block in `.env.example`) the st
 
 The email body is a static summary (verdict, KPIs, per-app status, Spring Boot quick fixes with the `<properties>` snippet, the P1 list), because mail clients strip JavaScript. The full interactive dashboard is attached as one HTML file. Sending works over **SMTP** or **Microsoft Graph** (`Mail.Send` application permission; it can reuse the SSO app registration). Recipients must match `DTRG_MAIL_ALLOWED_RECIPIENTS`. Schedules are stored in a SQLite file in `DTRG_DATA_DIR` (`/data` in the image; `docker-compose.yml` mounts a volume there).
 
+### Access control
+dtrg is never open by default:
+
+- **`DTRG_API_KEY`** protects `/api/v1/*` (header `X-DTRG-Key` or `Authorization: Bearer ...`) and, when SSO is off, the browser UI: the first visit shows a sign-in form that asks for the same key. With SSO on, the browser uses the Microsoft login instead.
+- **Not set?** On the first start dtrg generates a random `DTRG_API_KEY` and `DTRG_SECRET_KEY`, stores them in `DTRG_DATA_DIR/dtrg.sqlite3` (the `/data` volume in Docker, file mode 600) and writes them to the log once (`WARNING ... generated and stored in ...`; log scanners may flag that line). Later starts reuse them and log no values. A key in `.env` always wins over the stored one.
+  ```
+  docker compose exec dtrg python -m backend.keys show                 # print the stored keys
+  docker compose exec dtrg python -m backend.keys reset [DTRG_API_KEY]  # forget them (all, or one)
+  docker compose restart dtrg                                            # generates new ones
+  ```
+  Backups of the data volume now contain these keys. If the data directory is not writable, dtrg falls back to a key per run (logged, with a warning).
+- **Explicitly open:** `DTRG_API_KEY=` with an empty value turns the key check and the sign-in off. dtrg logs a warning at start-up. Use it only on a trusted network.
+
+`/health` is always open for probes.
+
 ### Single sign-on (Microsoft Entra ID)
-The browser UI can require a Microsoft login (OpenID Connect, authorization code + PKCE). It is off by default. When it is on, the form, downloads, dashboard and Swagger UI need a signed-in user. `/health` stays open for probes, and `/api/v1/*` keeps using `DTRG_API_KEY` for CI.
+The browser UI can require a Microsoft login (OpenID Connect, authorization code + PKCE). It is off by default (the browser then signs in with `DTRG_API_KEY`, see above). When it is on, the form, downloads, dashboard and Swagger UI need a signed-in user. `/health` stays open for probes, and `/api/v1/*` keeps using `DTRG_API_KEY` for CI.
 
 1. In the Entra admin center go to **App registrations → New registration**:
    - Supported account types: *Accounts in this organizational directory only*.
@@ -187,7 +203,7 @@ unzip -p diff.zip summary.json \
 Notes:
 
 - `url` and `token` can be omitted from the request body when `DT_URL` and `DT_TOKEN` are set in the dtrg environment.
-- The endpoints are open by default. When the service is reachable beyond a trusted network, set `DTRG_API_KEY` so requests must present the same key in the `X-DTRG-Key` (or `Authorization: Bearer ...`) header.
+- Requests must present `DTRG_API_KEY` in the `X-DTRG-Key` (or `Authorization: Bearer ...`) header. When it is not set, dtrg generates and stores one (see [Access control](#access-control)); `DTRG_API_KEY=` (empty) opens the endpoints.
 - Errors come back as `{"error": "..."}` with a non-200 status, never as a redirect.
 - These endpoints are deliberately CSRF-exempt (CI tooling has no session). The form endpoints (`/reports/get_report`, `/projects/get_all`) keep CSRF protection on; rely on `DTRG_API_KEY` and network controls for `/api/v1/*`.
 - The full OpenAPI spec is served at [`/apispec.json`](http://localhost:5000/apispec.json) and the Swagger UI at [`/apidocs/`](http://localhost:5000/apidocs/), so you can explore request shapes and try calls from the browser.
@@ -235,10 +251,11 @@ All environment variables:
 * DTRG_DEBUG_ALLOW_REMOTE - explicit override that allows DTRG_DEBUG=true together with a non-loopback DTRG_HOST. Use only in trusted networks.
 * DTRG_VERIFY_TLS - verify TLS certificate of DT and CVE-PaaS (default: true; set to false only for self-signed test instances)
 * DTRG_HTTP_TIMEOUT - timeout in seconds for outbound HTTP calls to DT and CVE-PaaS (default: 120)
-* DTRG_SECRET_KEY - Flask secret key used to sign session cookies and CSRF tokens for the form endpoints (`/`, `/reports/get_report`, `/projects/get_all`). Set a stable value when running multiple workers or behind a reverse proxy so tokens stay valid across restarts. If unset, a random key is generated on each start.
+* DTRG_SECRET_KEY - Flask secret key used to sign session cookies and CSRF tokens for the form endpoints (`/`, `/reports/get_report`, `/projects/get_all`). Set a stable value when running multiple workers or behind a reverse proxy so tokens stay valid across restarts. If unset or empty, a random key is generated once and stored (see [Access control](#access-control)).
 * DTRG_SECURE_COOKIES - when `true`, the session cookie is sent only over HTTPS (`Secure` flag). Default `false` so local `http://localhost` dev keeps working. Turn on for any deployment behind TLS.
-* DTRG_API_KEY - shared secret required on the /api/v1/* endpoints. When unset (default) those endpoints are open and only network controls protect them; when set, callers must present the same value in an `X-DTRG-Key` or `Authorization: Bearer ...` header.
+* DTRG_API_KEY - access key for the /api/v1/* endpoints (callers present it in an `X-DTRG-Key` or `Authorization: Bearer ...` header) and, without SSO, for the browser sign-in. When unset, a random key is generated once, stored and logged (see [Access control](#access-control)). Set to an empty string to turn protection off (trusted networks only).
 * DTRG_API_RATE_LIMIT - per-IP rate limit applied to /api/v1/* (default `60/minute`). Empty disables enforcement. Format follows [Flask-Limiter notation](https://flask-limiter.readthedocs.io/en/stable/configuration.html#rate-limit-string-notation): e.g. `30/minute`, `1000/hour`, `5/second`.
+* DTRG_MAIL_RATE_LIMIT - per-IP rate limit on sending a report now (`/ui/email`, `/ui/subscriptions/<id>/run`), default `10/minute`. Empty disables it. The access-key sign-in form is limited to 10 attempts a minute.
 * DTRG_ALLOWED_HOSTS - comma-separated SSRF allowlist for the DT URL. When set, only listed hosts are accepted from the form / API (`*.example.com` matches subdomains). Default empty = no restriction (suitable for on-prem). Use this when running dtrg as a public service.
 * DTRG_CVEPAAS_KEY - optional CVE-PaaS API key. When set, dtrg adds an `X-API-Key` header to every CVE-PaaS request. Match the value of `CVE_PAAS_API_KEY` configured on the CVE-PaaS side.
 * DTRG_INCLUDE_SUPPRESSED - when `true`, vulnerabilities that DT considers suppressed via VEX (state `resolved` / `resolved_with_pedigree` / `false_positive` / `not_affected`) are still rendered in the report with their analysis state in the `All issues` sheet. Default `false`, which matches the DT UI.

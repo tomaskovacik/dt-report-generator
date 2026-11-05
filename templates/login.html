@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}dtrg: sign in{% endblock %}
+{% block content %}
+<div class="container py-5" style="max-width: 480px">
+    <h1 class="h4 mb-3">Dependency-Track reports</h1>
+    <form method="post" action="{{ url_for('keylogin.login') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="next" value="{{ next }}">
+        <label for="key" class="form-label">Access key (DTRG_API_KEY)</label>
+        <input type="password" class="form-control" id="key" name="key" autocomplete="current-password" required autofocus>
+        {% if error %}<div class="text-danger small mt-2">{{ error }}</div>{% endif %}
+        <div class="form-text">Set in dtrg's <code>.env</code>; when it is not set, dtrg generated one on its first start: <code>python -m backend.keys show</code> prints it.</div>
+        <button type="submit" class="btn btn-primary mt-3">Sign in</button>
+    </form>
+</div>
+{% endblock %}
