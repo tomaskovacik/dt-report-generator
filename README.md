@@ -118,6 +118,10 @@ export DTRG_OIDC_ALLOWED_USERS="*@example.com,contractor@partner.com"
 ```
 Behind a TLS proxy also set `DTRG_SECURE_COOKIES=true` and `DTRG_OIDC_REDIRECT_URI=https://<host>/auth/callback`. Other OIDC providers (Keycloak, Okta, Google) work through `DTRG_OIDC_METADATA_URL`.
 
+There is no dtrg login page with SSO: a page without a session goes straight to Microsoft, which signs you in without a prompt while your Microsoft session in that browser is alive. After the first login dtrg remembers the account (cookie `dtrg_login_hint`, the username only, 90 days) and sends it as `login_hint`, so Microsoft skips its account picker. *Sign out* forgets it. `DTRG_OIDC_DOMAIN_HINT=<your domain>` also skips Microsoft's "which organisation" step on a first login.
+
+**Fallback when Microsoft is unavailable:** `/auth/key` (or `/auth/login?nosso`) is the access-key form; `DTRG_API_KEY` signs in there as a shared user (subscriptions are those of the shared owner, as without SSO). It is rate limited like the API, and does not work when `DTRG_API_KEY` is empty.
+
 ## CI usage
 For pipelines a JSON API is exposed alongside the form. It returns the same ZIP, but does not need a browser session and is suitable for `curl` from a build job.
 
@@ -270,8 +274,9 @@ All environment variables:
 * DTRG_OIDC_ALLOWED_USERS - optional comma-separated allowlist of usernames / emails, glob patterns allowed (`*@example.com`). Empty = everyone the identity provider lets through.
 * DTRG_OIDC_REDIRECT_URI - override the callback URL (default derived from the request, e.g. `http://localhost:5000/auth/callback`). Set it when dtrg runs behind a reverse proxy.
 * DTRG_OIDC_POST_LOGOUT_URI - where Entra sends the browser after sign-out (default: the dtrg start page).
+* DTRG_OIDC_DOMAIN_HINT - optional `domain_hint` for the Microsoft login (e.g. `example.com`): skips the organisation lookup.
 * DTRG_OIDC_METADATA_URL - OIDC discovery URL for a non-Microsoft provider. Replaces the Entra tenant check.
-* DTRG_SESSION_HOURS - how long a login lasts (default 8).
+* DTRG_SESSION_HOURS - how long a login lasts, SSO or access key (default 8).
 * CVEPAAS_URL - [CVE-PaaS](https://github.com/denimoll/CVE-PaaS) address
 ## Development
 Tests live under `tests/` and run with pytest:

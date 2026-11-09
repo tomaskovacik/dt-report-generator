@@ -59,7 +59,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-__version__ = "4.0.0"
+__version__ = "4.1.0"
 
 # unset secrets are generated once and stored; see backend/keys.py
 keys.ensure_secrets()

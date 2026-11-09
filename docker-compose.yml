@@ -3,11 +3,11 @@
 #   cp .env.example .env    # DT_URL, DT_TOKEN, DTRG_SECRET_KEY, DTRG_API_KEY, optional SSO
 #   docker compose up -d
 #
-# Pin DTRG_TAG to a release (v.4.0.0) on servers; "management-dashboard"
+# Pin DTRG_TAG to a release (v.4.1.0) on servers; "management-dashboard"
 # follows the branch. To build from this checkout instead: docker compose up -d --build
 services:
   dtrg:
-    image: ghcr.io/tomaskovacik/dt-report-generator:${DTRG_TAG:-v.4.0.0}
+    image: ghcr.io/tomaskovacik/dt-report-generator:${DTRG_TAG:-v.4.1.0}
     build: .
     container_name: dtrg
     restart: unless-stopped

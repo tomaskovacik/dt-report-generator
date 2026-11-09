@@ -6,6 +6,8 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from authlib.integrations.flask_client import OAuthError
 from flask import Flask
+from flask_bootstrap import Bootstrap5
+from flask_wtf.csrf import CSRFProtect
 
 from backend import auth
 
@@ -20,8 +22,11 @@ METADATA = {
 
 
 def _make_app():
-    app = Flask(__name__)
-    app.config.update(SECRET_KEY="test", TESTING=True)
+    # the real templates, for the access-key form
+    app = Flask(__name__, template_folder="../templates")
+    app.config.update(SECRET_KEY="test", TESTING=True, WTF_CSRF_ENABLED=False)
+    Bootstrap5(app)
+    CSRFProtect(app)
     app.add_url_rule("/", "index", lambda: "form")
     app.add_url_rule("/health", "health", lambda: "ok")
     app.add_url_rule("/api/v1/projects", "api", lambda: "api", methods=["POST"])
@@ -168,3 +173,59 @@ def test_logout_clears_session_and_signs_out_of_entra(client):
     res = client.get("/auth/logout")
     assert res.headers["Location"].startswith(METADATA["end_session_endpoint"] + "?post_logout_redirect_uri=")
     assert client.get("/").status_code == 302
+
+
+# login_hint / domain_hint
+
+def test_callback_remembers_the_account_for_login_hint(client):
+    res = _login(client)
+    cookie = res.headers["Set-Cookie"]
+    assert cookie.startswith("dtrg_login_hint=jane@example.com;")
+    assert "HttpOnly" in cookie and "SameSite=Lax" in cookie and "Path=/auth/" in cookie
+    client.get("/auth/logout", follow_redirects=False)
+    # a later login (e.g. after the session expired) sends it
+    client.set_cookie("dtrg_login_hint", "jane@example.com", path="/auth/")
+    q = parse_qs(urlparse(client.get("/auth/login").headers["Location"]).query)
+    assert q["login_hint"] == ["jane@example.com"]
+
+def test_no_login_hint_without_the_cookie(client):
+    q = parse_qs(urlparse(client.get("/auth/login").headers["Location"]).query)
+    assert "login_hint" not in q and "domain_hint" not in q
+
+def test_domain_hint(client, monkeypatch):
+    monkeypatch.setenv("DTRG_OIDC_DOMAIN_HINT", "example.com")
+    q = parse_qs(urlparse(client.get("/auth/login").headers["Location"]).query)
+    assert q["domain_hint"] == ["example.com"]
+
+def test_logout_forgets_the_account(client):
+    _login(client)
+    res = client.get("/auth/logout")
+    assert any(h.startswith("dtrg_login_hint=;") for h in res.headers.getlist("Set-Cookie"))
+
+
+# access-key fallback with SSO on
+
+def test_nosso_goes_to_the_access_key_form(client):
+    res = client.get("/auth/login?nosso&next=/apidocs/")
+    assert res.status_code == 302 and res.headers["Location"] == "/auth/key?next=/apidocs/"
+    page = client.get("/auth/key?next=/apidocs/")
+    assert page.status_code == 200 and b"Access key" in page.data
+    assert b"Sign in with Microsoft instead" in page.data
+
+def test_access_key_signs_in_with_sso_on(client, monkeypatch):
+    monkeypatch.setenv("DTRG_API_KEY", "secret")
+    assert client.post("/auth/key", data={"key": "wrong"}).status_code == 401
+    assert client.get("/apidocs/").status_code == 302
+    res = client.post("/auth/key", data={"key": "secret", "next": "/apidocs/"})
+    assert res.headers["Location"] == "/apidocs/"
+    assert client.get("/apidocs/").data == b"docs"
+    client.get("/auth/key/logout")
+    assert client.get("/apidocs/").status_code == 302
+
+def test_empty_api_key_never_opens_the_ui_with_sso_on(client, monkeypatch):
+    monkeypatch.setenv("DTRG_API_KEY", "")
+    assert client.post("/auth/key", data={"key": ""}).status_code == 401
+    assert client.get("/apidocs/").status_code == 302
+
+def test_unauthenticated_pages_still_go_to_microsoft(client):
+    assert client.get("/apidocs/").headers["Location"].startswith("/auth/login?next=")

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.0]
+
+### Added
+
+- SSO login remembers the last account (cookie `dtrg_login_hint`, username only) and sends it as `login_hint`, so Microsoft skips its account picker; *Sign out* forgets it. Optional `DTRG_OIDC_DOMAIN_HINT`.
+- With SSO on, the access-key form is a fallback at `/auth/key` (or `/auth/login?nosso`) for when the identity provider is unavailable.
+
+### Changed
+
+- `DTRG_SESSION_HOURS` also limits access-key sessions (they lasted Flask's default 31 days).
+
 ## [4.0.0]
 
 ### Breaking

@@ -11,6 +11,7 @@
         {% if error %}<div class="text-danger small mt-2">{{ error }}</div>{% endif %}
         <div class="form-text">Set in dtrg's <code>.env</code>; when it is not set, dtrg generated one on its first start: <code>python -m backend.keys show</code> prints it.</div>
         <button type="submit" class="btn btn-primary mt-3">Sign in</button>
+        {% if sso_enabled %}<a class="ms-3" href="{{ url_for('auth.login', next=next) }}">Sign in with Microsoft instead</a>{% endif %}
     </form>
 </div>
 {% endblock %}
